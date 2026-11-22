@@ -33,14 +33,23 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
 
       - name: Install Android 36.1 Platform and NDK
         shell: bash
         run: |
-          yes | sdkmanager --licenses > /dev/null 2>&1 || true
-          sdkmanager --install "platform-tools" "platforms;android-36.1" "build-tools;36.0.0" || sdkmanager --install "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+          SDK_DIR="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          export ANDROID_SDK_ROOT="$SDK_DIR"
+          export ANDROID_HOME="$SDK_DIR"
+          echo "ANDROID_SDK_ROOT=$SDK_DIR" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=$SDK_DIR" >> "$GITHUB_ENV"
+          export PATH="$SDK_DIR/cmdline-tools/latest/bin:$SDK_DIR/platform-tools:$PATH"
+          (yes || true) | sdkmanager --sdk_root="$SDK_DIR" --licenses > /dev/null 2>&1 || true
+          sdkmanager --sdk_root="$SDK_DIR" "platform-tools" "platforms;android-36.1" "build-tools;36.0.0" || \
+            sdkmanager --sdk_root="$SDK_DIR" "platform-tools" "platforms;android-36" "build-tools;36.0.0"
           if [ "${{ github.event_name != 'workflow_dispatch' || inputs.build_native_stockfish == true }}" = "true" ]; then
-            sdkmanager --install "ndk;27.2.12479018"
+            sdkmanager --sdk_root="$SDK_DIR" "ndk;27.2.12479018" || true
           fi
 
       - name: Build Native Stockfish C++ NNUE (arm64-v8a & armeabi-v7a)
