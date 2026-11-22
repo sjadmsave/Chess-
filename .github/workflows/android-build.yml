@@ -18,6 +18,8 @@ jobs:
     name: Build APK & Tests
     runs-on: ubuntu-latest
     timeout-minutes: 35
+    env:
+      HAS_KEYSTORE: ${{ secrets.KEYSTORE_BASE64 != '' }}
 
     steps:
       - name: Checkout repository
@@ -32,75 +34,92 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Android 36 Platform and NDK
+      - name: Install Android 36.1 Platform and NDK
         shell: bash
         run: |
-          yes | sdkmanager --licenses >/dev/null || true
-          if [ "${{ github.event_name != 'workflow_dispatch' || inputs.build_native_stockfish }}" = "true" ]; then
-            sdkmanager "platforms;android-36" "ndk;27.2.12479018"
-          else
-            sdkmanager "platforms;android-36"
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager --install "platform-tools" "platforms;android-36.1" "build-tools;36.0.0" || sdkmanager --install "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+          if [ "${{ github.event_name != 'workflow_dispatch' || inputs.build_native_stockfish == true }}" = "true" ]; then
+            sdkmanager --install "ndk;27.2.12479018"
           fi
 
       - name: Build Native Stockfish C++ NNUE (arm64-v8a & armeabi-v7a)
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_native_stockfish }}
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_native_stockfish == true }}
         shell: bash
         run: |
-          set -e
           NDK_DIR="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
           if [ ! -d "$NDK_DIR" ]; then
             NDK_DIR="$(ls -d "$ANDROID_SDK_ROOT"/ndk/* 2>/dev/null | head -n 1 || true)"
           fi
           TOOLCHAIN_BIN="$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin"
           if [ ! -d "$TOOLCHAIN_BIN" ]; then
-            echo "Warning: NDK toolchain not found; skipping native Stockfish build."
+            echo "::warning::NDK toolchain not found; continuing with built-in engine."
             exit 0
           fi
 
-          # Provide unversioned clang++ shims expected by Stockfish Makefile COMP=ndk
+          export ANDROID_NDK_HOME="$NDK_DIR"
           SHIM_DIR="$RUNNER_TEMP/ndk-shims"
           mkdir -p "$SHIM_DIR"
-          ln -sf "$TOOLCHAIN_BIN/aarch64-linux-android24-clang++" "$SHIM_DIR/aarch64-linux-android-clang++"
-          ln -sf "$TOOLCHAIN_BIN/armv7a-linux-androideabi24-clang++" "$SHIM_DIR/armv7a-linux-androideabi-clang++"
+          for name in aarch64-linux-android-clang++ aarch64-linux-android21-clang++ aarch64-linux-android24-clang++; do
+            ln -sf "$TOOLCHAIN_BIN/aarch64-linux-android24-clang++" "$SHIM_DIR/$name"
+          done
+          for name in armv7a-linux-androideabi-clang++ armv7a-linux-androideabi16-clang++ armv7a-linux-androideabi21-clang++ armv7a-linux-androideabi24-clang++; do
+            ln -sf "$TOOLCHAIN_BIN/armv7a-linux-androideabi24-clang++" "$SHIM_DIR/$name"
+          done
           ln -sf "$TOOLCHAIN_BIN/llvm-strip" "$SHIM_DIR/strip" || true
           export PATH="$SHIM_DIR:$TOOLCHAIN_BIN:$PATH"
 
           rm -rf "$RUNNER_TEMP/Stockfish"
-          git clone --depth 1 https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/Stockfish"
+          if ! git clone --depth 1 https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/Stockfish"; then
+            echo "::warning::Could not clone Stockfish repository; continuing with built-in engine."
+            exit 0
+          fi
           cd "$RUNNER_TEMP/Stockfish/src"
 
           # 1) 64-bit ARM (arm64-v8a)
-          make -j"$(nproc)" build ARCH=armv8 COMP=ndk
-          "$TOOLCHAIN_BIN/llvm-strip" stockfish || true
-          mkdir -p "$GITHUB_WORKSPACE/app/src/main/jniLibs/arm64-v8a"
-          cp stockfish "$GITHUB_WORKSPACE/app/src/main/jniLibs/arm64-v8a/libstockfish.so"
-          chmod +x "$GITHUB_WORKSPACE/app/src/main/jniLibs/arm64-v8a/libstockfish.so"
+          if make -j"$(nproc)" build ARCH=armv8 COMP=ndk; then
+            "$TOOLCHAIN_BIN/llvm-strip" stockfish || true
+            mkdir -p "$GITHUB_WORKSPACE/app/src/main/jniLibs/arm64-v8a"
+            cp stockfish "$GITHUB_WORKSPACE/app/src/main/jniLibs/arm64-v8a/libstockfish.so"
+            chmod +x "$GITHUB_WORKSPACE/app/src/main/jniLibs/arm64-v8a/libstockfish.so"
+            echo "::notice::Bundled native Stockfish for arm64-v8a"
+          else
+            echo "::warning::arm64-v8a Stockfish NDK build failed; continuing with built-in engine."
+          fi
 
-          # 2) Optional 32-bit ARM (armeabi-v7a) fallback
-          make clean
-          if make -j"$(nproc)" build ARCH=armv7 COMP=ndk; then
+          # 2) Optional 32-bit ARM (armeabi-v7a)
+          make clean || true
+          if make -j"$(nproc)" build ARCH=armv7-neon COMP=ndk || make -j"$(nproc)" build ARCH=armv7 COMP=ndk; then
             "$TOOLCHAIN_BIN/llvm-strip" stockfish || true
             mkdir -p "$GITHUB_WORKSPACE/app/src/main/jniLibs/armeabi-v7a"
             cp stockfish "$GITHUB_WORKSPACE/app/src/main/jniLibs/armeabi-v7a/libstockfish.so"
             chmod +x "$GITHUB_WORKSPACE/app/src/main/jniLibs/armeabi-v7a/libstockfish.so"
+            echo "::notice::Bundled native Stockfish for armeabi-v7a"
           fi
 
-      - name: Prepare Debug Keystore and Gradle Wrapper
+      - name: Prepare Debug Keystore and Gradle Runner
         shell: bash
         run: |
           if [ ! -f debug.keystore ] && [ -f debug.keystore.base64 ]; then
             base64 -d debug.keystore.base64 > debug.keystore
           fi
-          chmod +x gradlew
+          if [ -f gradle/wrapper/gradle-wrapper.jar ] && [ -f gradlew ]; then
+            chmod +x gradlew
+            echo "GRADLE_CMD=./gradlew" >> "$GITHUB_ENV"
+          else
+            echo "GRADLE_CMD=gradle" >> "$GITHUB_ENV"
+          fi
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.3.1"
 
       - name: Run Unit Tests
-        run: ./gradlew testDebugUnitTest --stacktrace
+        run: $GRADLE_CMD testDebugUnitTest --stacktrace
 
       - name: Build Debug APK
-        run: ./gradlew assembleDebug --stacktrace
+        run: $GRADLE_CMD assembleDebug --stacktrace
 
       - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
@@ -110,17 +129,17 @@ jobs:
           if-no-files-found: error
 
       - name: Build Signed Release APK & AAB (Optional if Keystore Secret configured)
-        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
+        if: ${{ env.HAS_KEYSTORE == 'true' }}
         env:
           KEYSTORE_PATH: ${{ runner.temp }}/release-upload-key.jks
           STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > "$KEYSTORE_PATH"
-          ./gradlew assembleRelease bundleRelease --stacktrace
+          $GRADLE_CMD assembleRelease bundleRelease --stacktrace
 
       - name: Upload Release APK & AAB Artifacts
-        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
+        if: ${{ env.HAS_KEYSTORE == 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: EliteChess-Release-Outputs
