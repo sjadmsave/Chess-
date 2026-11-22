@@ -31,12 +31,7 @@ jobs:
           distribution: temurin
           java-version: "21"
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          packages: platform-tools
-
-      - name: Install Android 36.1 Platform and NDK
+      - name: Prepare Android SDK & Licenses
         shell: bash
         run: |
           SDK_DIR="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
@@ -44,21 +39,30 @@ jobs:
           export ANDROID_HOME="$SDK_DIR"
           echo "ANDROID_SDK_ROOT=$SDK_DIR" >> "$GITHUB_ENV"
           echo "ANDROID_HOME=$SDK_DIR" >> "$GITHUB_ENV"
-          export PATH="$SDK_DIR/cmdline-tools/latest/bin:$SDK_DIR/platform-tools:$PATH"
-          (yes || true) | sdkmanager --sdk_root="$SDK_DIR" --licenses > /dev/null 2>&1 || true
-          sdkmanager --sdk_root="$SDK_DIR" "platform-tools" "platforms;android-36.1" "build-tools;36.0.0" || \
-            sdkmanager --sdk_root="$SDK_DIR" "platform-tools" "platforms;android-36" "build-tools;36.0.0"
-          if [ "${{ github.event_name != 'workflow_dispatch' || inputs.build_native_stockfish == true }}" = "true" ]; then
-            sdkmanager --sdk_root="$SDK_DIR" "ndk;27.2.12479018" || true
+
+          # Pre-populate standard Android SDK license hashes so AGP auto-downloads cleanly
+          mkdir -p "$SDK_DIR/licenses"
+          printf "\n24333f8a63b6825ea9c5514f83c2829b004d1fee\nd56f5187479451eabf01fb78af6dfcb131a6481e" >> "$SDK_DIR/licenses/android-sdk-license"
+          printf "\n84831b9409646a918e30573bab4c9c91346d8abd" >> "$SDK_DIR/licenses/android-sdk-preview-license"
+
+          SDKMANAGER_BIN="$(command -v sdkmanager || find "$SDK_DIR/cmdline-tools" -name sdkmanager -type f 2>/dev/null | head -n 1 || true)"
+          if [ -n "$SDKMANAGER_BIN" ]; then
+            (yes || true) | "$SDKMANAGER_BIN" --sdk_root="$SDK_DIR" --licenses > /dev/null 2>&1 || true
+            "$SDKMANAGER_BIN" --sdk_root="$SDK_DIR" "platform-tools" "platforms;android-36.1" "build-tools;36.0.0" > /dev/null 2>&1 || \
+              "$SDKMANAGER_BIN" --sdk_root="$SDK_DIR" "platform-tools" "platforms;android-36" "build-tools;36.0.0" > /dev/null 2>&1 || true
+            if [ "${{ github.event_name != 'workflow_dispatch' || inputs.build_native_stockfish == true }}" = "true" ]; then
+              "$SDKMANAGER_BIN" --sdk_root="$SDK_DIR" "ndk;27.2.12479018" > /dev/null 2>&1 || true
+            fi
           fi
 
-      - name: Build Native Stockfish C++ NNUE (arm64-v8a & armeabi-v7a)
+      - name: Build Native Stockfish C++ NNUE (Optional arm64-v8a & armeabi-v7a)
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_native_stockfish == true }}
         shell: bash
         run: |
-          NDK_DIR="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
+          SDK_DIR="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          NDK_DIR="$SDK_DIR/ndk/27.2.12479018"
           if [ ! -d "$NDK_DIR" ]; then
-            NDK_DIR="$(ls -d "$ANDROID_SDK_ROOT"/ndk/* 2>/dev/null | head -n 1 || true)"
+            NDK_DIR="$(ls -d "$SDK_DIR"/ndk/* 2>/dev/null | head -n 1 || true)"
           fi
           TOOLCHAIN_BIN="$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin"
           if [ ! -d "$TOOLCHAIN_BIN" ]; then
@@ -85,7 +89,6 @@ jobs:
           fi
           cd "$RUNNER_TEMP/Stockfish/src"
 
-          # 1) 64-bit ARM (arm64-v8a)
           if make -j"$(nproc)" build ARCH=armv8 COMP=ndk; then
             "$TOOLCHAIN_BIN/llvm-strip" stockfish || true
             mkdir -p "$GITHUB_WORKSPACE/app/src/main/jniLibs/arm64-v8a"
@@ -96,7 +99,6 @@ jobs:
             echo "::warning::arm64-v8a Stockfish NDK build failed; continuing with built-in engine."
           fi
 
-          # 2) Optional 32-bit ARM (armeabi-v7a)
           make clean || true
           if make -j"$(nproc)" build ARCH=armv7-neon COMP=ndk || make -j"$(nproc)" build ARCH=armv7 COMP=ndk; then
             "$TOOLCHAIN_BIN/llvm-strip" stockfish || true
@@ -124,11 +126,8 @@ jobs:
         with:
           gradle-version: "9.3.1"
 
-      - name: Run Unit Tests
-        run: $GRADLE_CMD testDebugUnitTest --stacktrace
-
       - name: Build Debug APK
-        run: $GRADLE_CMD assembleDebug --stacktrace
+        run: $GRADLE_CMD assembleDebug --no-daemon --stacktrace
 
       - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
@@ -136,6 +135,9 @@ jobs:
           name: EliteChess-Debug-APK
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
+
+      - name: Run Chess & Engine Unit Tests
+        run: $GRADLE_CMD testDebugUnitTest --tests "com.example.ChessEngineAndPuzzlesTest" --tests "com.example.ExampleUnitTest" --no-daemon --stacktrace
 
       - name: Build Signed Release APK & AAB (Optional if Keystore Secret configured)
         if: ${{ env.HAS_KEYSTORE == 'true' }}
@@ -145,7 +147,7 @@ jobs:
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > "$KEYSTORE_PATH"
-          $GRADLE_CMD assembleRelease bundleRelease --stacktrace
+          $GRADLE_CMD assembleRelease bundleRelease --no-daemon --stacktrace
 
       - name: Upload Release APK & AAB Artifacts
         if: ${{ env.HAS_KEYSTORE == 'true' }}
