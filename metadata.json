@@ -1,0 +1,6 @@
+{
+  "name": "شطرنج النخبة",
+  "description": "لعبة شطرنج ذكية متكاملة بدون إنترنت مع محرك تحليل استراتيجي، شخصيات أبطال العالم، ألغاز وتحديات يومية، وتقارير أداء مفصلة باللغة العربية.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
