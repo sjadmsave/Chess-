@@ -77,6 +77,20 @@ private fun paletteFor(isWhite: Boolean, style: PieceStyle): PiecePalette = when
         )
     }
 
+    PieceStyle.HIGH_CONTRAST -> if (isWhite) {
+        PiecePalette(
+            fillBrush = Brush.verticalGradient(listOf(Color(0xFFFFFFFF), Color(0xFFF8FAFC))),
+            strokeColor = Color(0xFF000000),
+            detailColor = Color(0xFF0F172A)
+        )
+    } else {
+        PiecePalette(
+            fillBrush = Brush.verticalGradient(listOf(Color(0xFF111827), Color(0xFF000000))),
+            strokeColor = Color(0xFFFFFFFF),
+            detailColor = Color(0xFFF8FAFC)
+        )
+    }
+
     PieceStyle.ROYAL_HERITAGE -> if (isWhite) {
         PiecePalette(
             fillBrush = Brush.verticalGradient(listOf(Color(0xFFFFFBEB), Color(0xFFFDE68A), Color(0xFFD97706))),

@@ -11,18 +11,18 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 
 private val DarkColorScheme = darkColorScheme(
-    primary = EmeraldPrimaryDark,
-    onPrimary = OnEmeraldDark,
-    primaryContainer = EmeraldContainerDark,
-    onPrimaryContainer = OnEmeraldContainerDark,
-    secondary = GoldSecondaryDark,
-    onSecondary = OnGoldDark,
-    secondaryContainer = GoldContainerDark,
-    onSecondaryContainer = OnGoldContainerDark,
-    tertiary = CyanTertiaryDark,
-    onTertiary = OnCyanDark,
-    tertiaryContainer = CyanContainerDark,
-    onTertiaryContainer = OnCyanContainerDark,
+    primary = LeafGreenPrimaryDark,
+    onPrimary = OnLeafGreenDark,
+    primaryContainer = LeafGreenContainerDark,
+    onPrimaryContainer = OnLeafGreenContainerDark,
+    secondary = CrownGoldSecondaryDark,
+    onSecondary = OnCrownGoldDark,
+    secondaryContainer = CrownGoldContainerDark,
+    onSecondaryContainer = OnCrownGoldContainerDark,
+    tertiary = BrilliantCyanTertiaryDark,
+    onTertiary = OnBrilliantCyanDark,
+    tertiaryContainer = BrilliantCyanContainerDark,
+    onTertiaryContainer = OnBrilliantCyanContainerDark,
     background = BackgroundDark,
     onBackground = OnSurfaceDark,
     surface = SurfaceDark,
@@ -31,22 +31,22 @@ private val DarkColorScheme = darkColorScheme(
     onSurfaceVariant = OnSurfaceVariantDark,
     outline = OutlineDark,
     error = MoveBlunderColor,
-    onError = Color(0xFF3B0909)
+    onError = Color.White
 )
 
 private val LightColorScheme = lightColorScheme(
-    primary = EmeraldPrimaryLight,
-    onPrimary = OnEmeraldLight,
-    primaryContainer = EmeraldContainerLight,
-    onPrimaryContainer = OnEmeraldContainerLight,
-    secondary = GoldSecondaryLight,
-    onSecondary = OnGoldLight,
-    secondaryContainer = GoldContainerLight,
-    onSecondaryContainer = OnGoldContainerLight,
-    tertiary = CyanTertiaryLight,
-    onTertiary = OnCyanLight,
-    tertiaryContainer = CyanContainerLight,
-    onTertiaryContainer = OnCyanContainerLight,
+    primary = LeafGreenPrimaryLight,
+    onPrimary = OnLeafGreenLight,
+    primaryContainer = LeafGreenContainerLight,
+    onPrimaryContainer = OnLeafGreenContainerLight,
+    secondary = CrownGoldSecondaryLight,
+    onSecondary = OnCrownGoldLight,
+    secondaryContainer = CrownGoldContainerLight,
+    onSecondaryContainer = OnCrownGoldContainerLight,
+    tertiary = BrilliantCyanTertiaryLight,
+    onTertiary = OnBrilliantCyanLight,
+    tertiaryContainer = BrilliantCyanContainerLight,
+    onTertiaryContainer = OnBrilliantCyanContainerLight,
     background = BackgroundLight,
     onBackground = OnSurfaceLight,
     surface = SurfaceLight,
@@ -54,22 +54,22 @@ private val LightColorScheme = lightColorScheme(
     surfaceVariant = SurfaceVariantLight,
     onSurfaceVariant = OnSurfaceVariantLight,
     outline = OutlineLight,
-    error = Color(0xFFDC2626),
+    error = MoveBlunderColor,
     onError = Color.White
 )
 
 val EliteChessShapes = Shapes(
-    extraSmall = RoundedCornerShape(8.dp),
-    small = RoundedCornerShape(12.dp),
-    medium = RoundedCornerShape(16.dp),
-    large = RoundedCornerShape(22.dp),
-    extraLarge = RoundedCornerShape(28.dp)
+    extraSmall = RoundedCornerShape(6.dp),
+    small = RoundedCornerShape(10.dp),
+    medium = RoundedCornerShape(12.dp),
+    large = RoundedCornerShape(16.dp),
+    extraLarge = RoundedCornerShape(22.dp)
 )
 
 enum class AppThemeMode(val labelAr: String) {
     SYSTEM("تلقائي"),
-    DARK("الوضع الليلي"),
-    LIGHT("الوضع النهاري")
+    DARK("الوضع الداكن"),
+    LIGHT("الوضع الفاتح")
 }
 
 @Composable

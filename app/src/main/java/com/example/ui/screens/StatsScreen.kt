@@ -46,6 +46,7 @@ import com.example.data.RatingPointEntity
 import com.example.data.ReportPeriod
 import com.example.data.SavedGameEntity
 import com.example.data.UserPreferences
+import com.example.data.formatOpponentTitle
 import com.example.ui.components.AccuracyTrendBars
 import com.example.ui.components.EloProgressionChart
 import com.example.ui.components.PhaseGaugeRow
@@ -295,7 +296,7 @@ fun StatsScreen(
                 }
             } else {
                 items(completedGames, key = { it.id }) { game ->
-                    val bot = BotPersona.byId(game.botId)
+                    val oppTitle = remember(game.botId) { formatOpponentTitle(game.botId) }
                     val res = runCatching { GameResult.valueOf(game.resultName) }.getOrDefault(GameResult.ONGOING)
                     Card(
                         onClick = { onReviewSavedGame(game) },
@@ -311,8 +312,10 @@ fun StatsScreen(
                         ) {
                             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                                 Text(
-                                    text = "ضد ${bot.nameAr} • ${res.labelAr}",
-                                    style = MaterialTheme.typography.titleSmall
+                                    text = "$oppTitle • ${res.labelAr}",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                                 Text(
                                     text = "${game.openingNameAr} • ${dateFormat.format(Date(game.updatedAt))}",

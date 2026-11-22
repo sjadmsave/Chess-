@@ -289,6 +289,16 @@ class ChessBoardState private constructor(
         )
     }
 
+    fun copyWithNullMove(): ChessBoardState = ChessBoardState(
+        board = board,
+        turn = turn.opposite(),
+        castling = castling,
+        enPassantTarget = null,
+        halfMoveClock = halfMoveClock + 1,
+        fullMoveNumber = if (turn == PieceColor.BLACK) fullMoveNumber + 1 else fullMoveNumber,
+        positionHistory = positionHistory
+    )
+
     fun generatePseudoLegalMoves(color: PieceColor): List<ChessMove> {
         val moves = ArrayList<ChessMove>(40)
         for (idx in 0..63) {

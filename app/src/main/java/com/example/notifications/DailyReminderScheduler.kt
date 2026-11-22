@@ -93,7 +93,7 @@ object DailyReminderScheduler {
 
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher_round)
-            .setContentTitle("شطرنج النخبة • تدريبك الذكي اليومي")
+            .setContentTitle("أرينا الشطرنج • مدربك الذكي اليومي")
             .setContentText(body)
             .setStyle(NotificationCompat.BigTextStyle().bigText(body))
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)

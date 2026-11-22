@@ -178,6 +178,13 @@ fun PuzzlesScreen(
                             hintMove = puzzleState.hintArrowMove,
                             flipped = false,
                             interactive = !puzzleState.isSolved,
+                            boardMaterial = prefs.boardMaterial,
+                            showLastMove = prefs.showLastMove,
+                            showLegalMoves = prefs.showLegalMoves,
+                            useRingsInsteadOfDots = prefs.useRingsInsteadOfDots,
+                            selectedHighlightColor = androidx.compose.ui.graphics.Color(prefs.selectedColorHex),
+                            lastMoveHighlightColor = androidx.compose.ui.graphics.Color(prefs.lastMoveColorHex),
+                            legalMoveIndicatorColor = androidx.compose.ui.graphics.Color(prefs.legalMoveColorHex),
                             onSquareClick = { sq ->
                                 if (prefs.hapticsEnabled) haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                 onSquareClick(sq)

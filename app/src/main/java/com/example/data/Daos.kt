@@ -14,6 +14,9 @@ interface SavedGameDao {
     @Query("SELECT * FROM saved_games WHERE isCompleted = 1 ORDER BY updatedAt DESC")
     fun observeCompletedGames(): Flow<List<SavedGameEntity>>
 
+    @Query("SELECT * FROM saved_games ORDER BY updatedAt DESC")
+    fun observeAllGames(): Flow<List<SavedGameEntity>>
+
     @Query("SELECT * FROM saved_games WHERE id = :id")
     suspend fun getById(id: Long): SavedGameEntity?
 

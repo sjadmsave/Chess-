@@ -94,13 +94,13 @@ enum class MoveQuality(
     val badge: String,
     val colorHex: Long
 ) {
-    BRILLIANT("نقلة عبقرية", "!!", 0xFF22D3EE),
-    BEST("أفضل نقلة", "★", 0xFF34D399),
-    EXCELLENT("نقلة ممتازة", "✓", 0xFF4ADE80),
-    GOOD("نقلة جيدة", "•", 0xFF60A5FA),
-    INACCURACY("عدم دقة", "?!", 0xFFFBBF24),
-    MISTAKE("خطأ", "?", 0xFFFB923C),
-    BLUNDER("خطأ فادح", "??", 0xFFF87171)
+    BRILLIANT("نقلة عبقرية", "!!", 0xFF26C6DA),
+    BEST("أفضل نقلة", "★", 0xFF81B64C),
+    EXCELLENT("نقلة ممتازة", "✓", 0xFF96BC4B),
+    GOOD("نقلة جيدة", "•", 0xFFA3D160),
+    INACCURACY("عدم دقة", "?!", 0xFFF7C631),
+    MISTAKE("خطأ", "?", 0xFFE58F2A),
+    BLUNDER("خطأ فادح", "??", 0xFFCA3431)
 }
 
 enum class GamePhase(val labelAr: String) {
@@ -128,12 +128,31 @@ enum class GameResult(val labelAr: String) {
     ONGOING("جارية"),
     WHITE_WINS_CHECKMATE("فوز الأبيض (كش مات)"),
     BLACK_WINS_CHECKMATE("فوز الأسود (كش مات)"),
+    WHITE_TIMEOUT("فوز الأسود (انتهاء وقت الأبيض)"),
+    BLACK_TIMEOUT("فوز الأبيض (انتهاء وقت الأسود)"),
     DRAW_STALEMATE("تعادل (ستالميت)"),
     DRAW_INSUFFICIENT_MATERIAL("تعادل (نقص القطع)"),
     DRAW_FIFTY_MOVE("تعادل (قاعدة 50 نقلة)"),
     DRAW_REPETITION("تعادل (تكرار ثلاثي)"),
     WHITE_RESIGNED("استسلام الأبيض"),
     BLACK_RESIGNED("استسلام الأسود")
+}
+
+enum class TimeControl(
+    val id: String,
+    val labelAr: String,
+    val categoryAr: String,
+    val initialSeconds: Long,
+    val incrementSeconds: Long
+) {
+    UNLIMITED("unlimited", "مفتوح", "تدريب حر", 0L, 0L),
+    RAPID_10("rapid10", "10 د", "سريع", 600L, 0L),
+    BLITZ_5_3("blitz5_3", "5+3", "بليتز", 300L, 3L),
+    BULLET_3_2("bullet3_2", "3+2", "خاطف", 180L, 2L);
+
+    companion object {
+        fun byId(id: String): TimeControl = entries.find { it.id == id } ?: RAPID_10
+    }
 }
 
 data class CastlingRights(
@@ -383,13 +402,156 @@ enum class BotPersona(
     }
 }
 
+enum class EnginePersonality(
+    val id: String,
+    val nameAr: String,
+    val descriptionAr: String,
+    val aggressionWeight: Float,
+    val tacticalWeight: Float,
+    val safetyWeight: Float
+) {
+    TRADITIONAL(
+        id = "traditional",
+        nameAr = "تقليدي",
+        descriptionAr = "أسلوب المحرك الحالي وقوة اللعب المختارة.",
+        aggressionWeight = 1.0f,
+        tacticalWeight = 1.0f,
+        safetyWeight = 1.0f
+    ),
+    OPPORTUNITY_HUNTER(
+        id = "hunter",
+        nameAr = "صائد الفرص",
+        descriptionAr = "يحسم فرص المات والتكتيكات المؤكدة.",
+        aggressionWeight = 1.24f,
+        tacticalWeight = 1.35f,
+        safetyWeight = 1.0f
+    ),
+    BRILLIANCY_CREATOR(
+        id = "brilliancy",
+        nameAr = "صانع البريليانت",
+        descriptionAr = "يبحث عن أفكار غير مباشرة وتضحيات سليمة.",
+        aggressionWeight = 1.32f,
+        tacticalWeight = 1.30f,
+        safetyWeight = 0.88f
+    ),
+    LONG_GAME_MAKER(
+        id = "long_game",
+        nameAr = "صانع المباراة الطويلة",
+        descriptionAr = "يحافظ على التعقيد عندما تكون النتيجة في أمان.",
+        aggressionWeight = 0.95f,
+        tacticalWeight = 1.02f,
+        safetyWeight = 1.20f
+    ),
+    FIERCE_WARRIOR(
+        id = "warrior",
+        nameAr = "المحارب الشرس",
+        descriptionAr = "يفتح الخطوط ويتقدم نحو ملك الخصم.",
+        aggressionWeight = 1.45f,
+        tacticalWeight = 1.18f,
+        safetyWeight = 0.80f
+    ),
+    IRON_FORTRESS(
+        id = "fortress",
+        nameAr = "القلعة الحديدية",
+        descriptionAr = "يحصّن الملك ويختار هجمات مضادة آمنة.",
+        aggressionWeight = 0.82f,
+        tacticalWeight = 1.0f,
+        safetyWeight = 1.45f
+    ),
+    STRATEGIC_GENIUS(
+        id = "strategist",
+        nameAr = "العبقري الاستراتيجي",
+        descriptionAr = "يحسّن مواقع القطع وبنية البيادق تدريجياً.",
+        aggressionWeight = 1.0f,
+        tacticalWeight = 1.05f,
+        safetyWeight = 1.22f
+    ),
+    MISTAKE_CATCHER(
+        id = "catcher",
+        nameAr = "صياد الأخطاء",
+        descriptionAr = "يفضّل الوضعيات التي تتطلب دفاعاً دقيقاً.",
+        aggressionWeight = 1.12f,
+        tacticalWeight = 1.25f,
+        safetyWeight = 1.12f
+    ),
+    SACRIFICE_KING(
+        id = "sacrifice_king",
+        nameAr = "ملك التضحيات",
+        descriptionAr = "يعطي المبادرة الهجومية وزناً كبيراً مقابل المادة.",
+        aggressionWeight = 1.52f,
+        tacticalWeight = 1.35f,
+        safetyWeight = 0.72f
+    ),
+    PATIENT_SERPENT(
+        id = "serpent",
+        nameAr = "الثعبان الصبور",
+        descriptionAr = "يضيّق مساحة الخصم ويحافظ على الضغط.",
+        aggressionWeight = 0.90f,
+        tacticalWeight = 1.05f,
+        safetyWeight = 1.32f
+    );
+
+    companion object {
+        fun byId(id: String): EnginePersonality = entries.find { it.id == id } ?: OPPORTUNITY_HUNTER
+    }
+}
+
+enum class BoardMaterial(val id: String, val nameAr: String) {
+    FLAT("flat", "سادة"),
+    WOOD("wood", "خشب"),
+    IVORY("ivory", "عاج"),
+    MARBLE("marble", "رخام");
+
+    companion object {
+        fun byId(id: String): BoardMaterial = entries.find { it.id == id } ?: FLAT
+    }
+}
+
+enum class FloatingFrameShape(val id: String, val nameAr: String, val cornerDp: Int) {
+    COMPACT("compact", "مدمجة", 12),
+    SQUARE("square", "مربّعة", 4),
+    ROUNDED("rounded", "مستديرة", 22);
+
+    companion object {
+        fun byId(id: String): FloatingFrameShape = entries.find { it.id == id } ?: COMPACT
+    }
+}
+
+enum class FloatingBubbleSize(val id: String, val nameAr: String, val sizeDp: Int) {
+    SMALL("small", "صغيرة", 48),
+    MEDIUM("medium", "متوسطة", 60),
+    LARGE("large", "كبيرة", 72);
+
+    companion object {
+        fun byId(id: String): FloatingBubbleSize = entries.find { it.id == id } ?: SMALL
+    }
+}
+
+enum class EngineBackendPreference(val id: String, val nameAr: String, val subtitleAr: String) {
+    STOCKFISH_AUTO(
+        id = "stockfish_auto",
+        nameAr = "ستوك فيش (Stockfish UCI)",
+        subtitleAr = "يستخدم ملف libstockfish.so أو محرك OEX عند توفره، أو المحرك المدمج المتطور تلقائياً"
+    ),
+    BUILTIN_ENGINE(
+        id = "builtin",
+        nameAr = "المحرك المدمج المتطور",
+        subtitleAr = "بحث فوري بجدول التحويلات Zobrist وتقليم المسارات"
+    );
+
+    companion object {
+        fun byId(id: String): EngineBackendPreference = entries.find { it.id == id } ?: STOCKFISH_AUTO
+    }
+}
+
 enum class PieceStyle(
     val id: String,
     val nameAr: String,
     val subtitleAr: String
 ) {
-    CLASSIC_STAUNTON("classic", "كلاسيكي ستونتون", "عاج دافئ وأوبسيديان أصيل"),
-    MODERN_GEOMETRIC("geometric", "هندسي عصري", "أشكال حادة بلمسة معاصرة"),
+    CLASSIC_STAUNTON("classic", "كلاسيكي", "عاج دافئ وأوبسيديان أصيل"),
+    MODERN_GEOMETRIC("geometric", "هندسي", "أشكال حادة بلمسة معاصرة"),
+    HIGH_CONTRAST("high_contrast", "عالي الوضوح", "خطوط عريضة وتباين حاد للرؤية السريعة"),
     ROYAL_HERITAGE("royal", "تراثي ملكي", "تاج ذهبي وقواعد فاخرة"),
     WOOD_CARVED("wood", "خشب محفور", "قيقب فاتح وماهوغني دافئ"),
     NEON_CYBER("neon", "نيون سيبراني", "توهج تركوازي وذهبي متقد");
@@ -419,12 +581,12 @@ enum class BoardTheme(
     ),
     TOURNAMENT_EMERALD(
         id = "emerald",
-        nameAr = "زمرد الملوك",
+        nameAr = "الأخضر الكلاسيكي",
         lightSquare = Color(0xFFEEEED2),
-        darkSquare = Color(0xFF4F8A5B),
-        selectedHighlight = Color(0x8838BDF8),
-        lastMoveHighlight = Color(0x66FACC15),
-        boardBorder = Color(0xFF214A31)
+        darkSquare = Color(0xFF769656),
+        selectedHighlight = Color(0x99F7C631),
+        lastMoveHighlight = Color(0x88BACA44),
+        boardBorder = Color(0xFF3A4A29)
     ),
     OBSIDIAN_GOLD(
         id = "obsidian",

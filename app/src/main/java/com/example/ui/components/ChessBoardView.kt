@@ -41,9 +41,11 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.chess.BoardMaterial
 import com.example.chess.BoardTheme
 import com.example.chess.ChessBoardState
 import com.example.chess.ChessMove
@@ -62,12 +64,19 @@ fun ChessBoardView(
     boardState: ChessBoardState,
     boardTheme: BoardTheme,
     pieceStyle: PieceStyle = PieceStyle.CLASSIC_STAUNTON,
+    boardMaterial: BoardMaterial = BoardMaterial.FLAT,
     selectedSquare: Square?,
     legalMovesForSelected: List<ChessMove>,
     lastMove: ChessMove?,
     hintMove: ChessMove?,
     flipped: Boolean,
     interactive: Boolean,
+    showLastMove: Boolean = true,
+    showLegalMoves: Boolean = true,
+    useRingsInsteadOfDots: Boolean = true,
+    selectedHighlightColor: Color? = null,
+    lastMoveHighlightColor: Color? = null,
+    legalMoveIndicatorColor: Color? = null,
     onSquareClick: (Square) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -78,21 +87,25 @@ fun ChessBoardView(
         legalMovesForSelected.map { it.to }.toSet()
     }
 
+    val effectiveSelectedColor = selectedHighlightColor ?: boardTheme.selectedHighlight
+    val effectiveLastMoveColor = lastMoveHighlightColor ?: boardTheme.lastMoveHighlight
+    val effectiveLegalColor = legalMoveIndicatorColor ?: Color(0xCC0D9488)
+
     // Chessboard coordinates must always follow standard LTR algebraic orientation
     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
         Box(
             modifier = modifier
                 .aspectRatio(1f)
-                .clip(RoundedCornerShape(16.dp))
+                .clip(RoundedCornerShape(14.dp))
                 .background(boardTheme.boardBorder)
-                .border(3.dp, boardTheme.boardBorder, RoundedCornerShape(16.dp))
-                .padding(4.dp)
+                .border(2.5.dp, boardTheme.boardBorder, RoundedCornerShape(14.dp))
+                .padding(3.dp)
                 .testTag("chess_board")
         ) {
             BoxWithConstraints(
                 modifier = Modifier
                     .fillMaxSize()
-                    .clip(RoundedCornerShape(12.dp))
+                    .clip(RoundedCornerShape(11.dp))
             ) {
                 val squareSize = maxWidth / 8f
 
@@ -106,8 +119,8 @@ fun ChessBoardView(
                                 val isLight = (row + col) % 2 == 0
                                 val piece = boardState.pieceAt(sq)
                                 val isSelected = selectedSquare == sq
-                                val isLastMove = lastMove != null && (lastMove.from == sq || lastMove.to == sq)
-                                val isLegalTarget = sq in legalTargets
+                                val isLastMove = showLastMove && lastMove != null && (lastMove.from == sq || lastMove.to == sq)
+                                val isLegalTarget = showLegalMoves && (sq in legalTargets)
                                 val isCheckSquare = kingInCheckSquare == sq
 
                                 val baseColor = if (isLight) boardTheme.lightSquare else boardTheme.darkSquare
@@ -115,11 +128,11 @@ fun ChessBoardView(
 
                                 val overlayColor by animateColorAsState(
                                     targetValue = when {
-                                        isSelected -> boardTheme.selectedHighlight
-                                        isLastMove -> boardTheme.lastMoveHighlight
+                                        isSelected -> effectiveSelectedColor
+                                        isLastMove -> effectiveLastMoveColor
                                         else -> Color.Transparent
                                     },
-                                    animationSpec = tween(160),
+                                    animationSpec = tween(150),
                                     label = "squareHighlight"
                                 )
 
@@ -139,6 +152,15 @@ fun ChessBoardView(
                                         .testTag("sq_${sq.toAlgebraic()}"),
                                     contentAlignment = Alignment.Center
                                 ) {
+                                    // Subtle board surface texture (Wood / Ivory / Marble)
+                                    if (boardMaterial != BoardMaterial.FLAT) {
+                                        BoardTextureOverlay(
+                                            material = boardMaterial,
+                                            isLight = isLight,
+                                            seed = row * 8 + col
+                                        )
+                                    }
+
                                     // Red radial glow when king is in check
                                     if (isCheckSquare) {
                                         Box(
@@ -194,7 +216,7 @@ fun ChessBoardView(
                                         )
                                     }
 
-                                    // Legal move indicator
+                                    // Legal move indicator (Rings or Dots)
                                     if (isLegalTarget) {
                                         if (piece != null) {
                                             Box(
@@ -203,7 +225,17 @@ fun ChessBoardView(
                                                     .padding(3.dp)
                                                     .border(
                                                         width = 3.dp,
-                                                        color = Color(0xBB10B981),
+                                                        color = effectiveLegalColor,
+                                                        shape = CircleShape
+                                                    )
+                                            )
+                                        } else if (useRingsInsteadOfDots) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(squareSize * 0.44f)
+                                                    .border(
+                                                        width = 2.5.dp,
+                                                        color = effectiveLegalColor,
                                                         shape = CircleShape
                                                     )
                                             )
@@ -212,7 +244,7 @@ fun ChessBoardView(
                                                 modifier = Modifier
                                                     .size(squareSize * 0.30f)
                                                     .clip(CircleShape)
-                                                    .background(Color(0x9910B981))
+                                                    .background(effectiveLegalColor)
                                             )
                                         }
                                     }
@@ -279,6 +311,40 @@ fun ChessBoardView(
 }
 
 @Composable
+private fun BoardTextureOverlay(
+    material: BoardMaterial,
+    isLight: Boolean,
+    seed: Int
+) {
+    Canvas(modifier = Modifier.fillMaxSize()) {
+        val w = size.width
+        val h = size.height
+        when (material) {
+            BoardMaterial.FLAT -> Unit
+            BoardMaterial.WOOD -> {
+                val grainColor = if (isLight) Color(0x148B5A2B) else Color(0x1C3E220C)
+                for (i in 1..3) {
+                    val y = h * (i * 0.25f) + ((seed % 3) - 1) * 2f
+                    drawLine(grainColor, Offset(0f, y), Offset(w, y + 2f), strokeWidth = 1.5f)
+                }
+            }
+            BoardMaterial.IVORY -> {
+                drawRect(
+                    brush = Brush.linearGradient(
+                        colors = listOf(Color(0x18FFFFFF), Color.Transparent, Color(0x12000000))
+                    )
+                )
+            }
+            BoardMaterial.MARBLE -> {
+                val veinColor = if (isLight) Color(0x18475569) else Color(0x1FFFFFFF)
+                drawLine(veinColor, Offset(0f, h * 0.2f), Offset(w * 0.85f, h), strokeWidth = 1.6f)
+                drawLine(veinColor, Offset(w * 0.3f, 0f), Offset(w, h * 0.6f), strokeWidth = 1.2f)
+            }
+        }
+    }
+}
+
+@Composable
 fun PromotionPickerDialog(
     color: PieceColor,
     pieceStyle: PieceStyle = PieceStyle.CLASSIC_STAUNTON,
@@ -334,3 +400,51 @@ fun PromotionPickerDialog(
         confirmButton = {}
     )
 }
+
+@Composable
+fun MiniBoardThumbnail(
+    boardState: ChessBoardState,
+    boardTheme: BoardTheme,
+    pieceStyle: PieceStyle,
+    size: Dp = 80.dp,
+    modifier: Modifier = Modifier
+) {
+    val pieceSize = size / 9.2f
+    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+        Column(
+            modifier = modifier
+                .size(size)
+                .clip(RoundedCornerShape(10.dp))
+                .border(1.5.dp, boardTheme.boardBorder, RoundedCornerShape(10.dp))
+        ) {
+            for (r in 0..7) {
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                ) {
+                    for (c in 0..7) {
+                        val isLight = (r + c) % 2 == 0
+                        val piece = boardState.pieceAt(Square(r, c))
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxSize()
+                                .background(if (isLight) boardTheme.lightSquare else boardTheme.darkSquare),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (piece != null) {
+                                ChessPieceGraphic(
+                                    piece = piece,
+                                    pieceSize = pieceSize,
+                                    pieceStyle = pieceStyle
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+

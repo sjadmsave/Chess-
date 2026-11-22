@@ -76,11 +76,10 @@ object ChessCoachAnalyzer {
         )
     }
 
-    fun generateHint(state: ChessBoardState): MoveHint? {
+    fun generateHint(state: ChessBoardState, precomputedBest: ChessMove? = null): MoveHint? {
         val legal = state.generateLegalMoves()
         if (legal.isEmpty()) return null
-        val search = ChessEngine.evaluatePositionBestMove(state, depth = 3, timeLimitMs = 550L)
-        val best = search.bestMove ?: legal.first()
+        val best = precomputedBest ?: ChessEngine.evaluatePositionBestMove(state, depth = 4, timeLimitMs = 650L).bestMove ?: legal.first()
         val san = state.toSan(best, legal)
         val piece = state.pieceAt(best.from)
         val after = state.copyWithMoveFast(best)
@@ -263,8 +262,8 @@ object ChessCoachAnalyzer {
 
         // Compute ELO delta
         val actualScore = when {
-            (result == GameResult.WHITE_WINS_CHECKMATE || result == GameResult.BLACK_RESIGNED) && playerColor == PieceColor.WHITE -> 1.0
-            (result == GameResult.BLACK_WINS_CHECKMATE || result == GameResult.WHITE_RESIGNED) && playerColor == PieceColor.BLACK -> 1.0
+            (result == GameResult.WHITE_WINS_CHECKMATE || result == GameResult.BLACK_RESIGNED || result == GameResult.BLACK_TIMEOUT) && playerColor == PieceColor.WHITE -> 1.0
+            (result == GameResult.BLACK_WINS_CHECKMATE || result == GameResult.WHITE_RESIGNED || result == GameResult.WHITE_TIMEOUT) && playerColor == PieceColor.BLACK -> 1.0
             result == GameResult.DRAW_STALEMATE || result == GameResult.DRAW_INSUFFICIENT_MATERIAL ||
                 result == GameResult.DRAW_FIFTY_MOVE || result == GameResult.DRAW_REPETITION -> 0.5
             else -> 0.0

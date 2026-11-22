@@ -1,0 +1,129 @@
+name: Build EliteChess Android APK
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+    inputs:
+      build_native_stockfish:
+        description: "Compile official Stockfish C++ NNUE binary via Android NDK and bundle into APK"
+        required: false
+        default: true
+        type: boolean
+
+jobs:
+  build:
+    name: Build APK & Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android 36 Platform and NDK
+        shell: bash
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          if [ "${{ github.event_name != 'workflow_dispatch' || inputs.build_native_stockfish }}" = "true" ]; then
+            sdkmanager "platforms;android-36" "ndk;27.2.12479018"
+          else
+            sdkmanager "platforms;android-36"
+          fi
+
+      - name: Build Native Stockfish C++ NNUE (arm64-v8a & armeabi-v7a)
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_native_stockfish }}
+        shell: bash
+        run: |
+          set -e
+          NDK_DIR="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
+          if [ ! -d "$NDK_DIR" ]; then
+            NDK_DIR="$(ls -d "$ANDROID_SDK_ROOT"/ndk/* 2>/dev/null | head -n 1 || true)"
+          fi
+          TOOLCHAIN_BIN="$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          if [ ! -d "$TOOLCHAIN_BIN" ]; then
+            echo "Warning: NDK toolchain not found; skipping native Stockfish build."
+            exit 0
+          fi
+
+          # Provide unversioned clang++ shims expected by Stockfish Makefile COMP=ndk
+          SHIM_DIR="$RUNNER_TEMP/ndk-shims"
+          mkdir -p "$SHIM_DIR"
+          ln -sf "$TOOLCHAIN_BIN/aarch64-linux-android24-clang++" "$SHIM_DIR/aarch64-linux-android-clang++"
+          ln -sf "$TOOLCHAIN_BIN/armv7a-linux-androideabi24-clang++" "$SHIM_DIR/armv7a-linux-androideabi-clang++"
+          ln -sf "$TOOLCHAIN_BIN/llvm-strip" "$SHIM_DIR/strip" || true
+          export PATH="$SHIM_DIR:$TOOLCHAIN_BIN:$PATH"
+
+          rm -rf "$RUNNER_TEMP/Stockfish"
+          git clone --depth 1 https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/Stockfish"
+          cd "$RUNNER_TEMP/Stockfish/src"
+
+          # 1) 64-bit ARM (arm64-v8a)
+          make -j"$(nproc)" build ARCH=armv8 COMP=ndk
+          "$TOOLCHAIN_BIN/llvm-strip" stockfish || true
+          mkdir -p "$GITHUB_WORKSPACE/app/src/main/jniLibs/arm64-v8a"
+          cp stockfish "$GITHUB_WORKSPACE/app/src/main/jniLibs/arm64-v8a/libstockfish.so"
+          chmod +x "$GITHUB_WORKSPACE/app/src/main/jniLibs/arm64-v8a/libstockfish.so"
+
+          # 2) Optional 32-bit ARM (armeabi-v7a) fallback
+          make clean
+          if make -j"$(nproc)" build ARCH=armv7 COMP=ndk; then
+            "$TOOLCHAIN_BIN/llvm-strip" stockfish || true
+            mkdir -p "$GITHUB_WORKSPACE/app/src/main/jniLibs/armeabi-v7a"
+            cp stockfish "$GITHUB_WORKSPACE/app/src/main/jniLibs/armeabi-v7a/libstockfish.so"
+            chmod +x "$GITHUB_WORKSPACE/app/src/main/jniLibs/armeabi-v7a/libstockfish.so"
+          fi
+
+      - name: Prepare Debug Keystore and Gradle Wrapper
+        shell: bash
+        run: |
+          if [ ! -f debug.keystore ] && [ -f debug.keystore.base64 ]; then
+            base64 -d debug.keystore.base64 > debug.keystore
+          fi
+          chmod +x gradlew
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Run Unit Tests
+        run: ./gradlew testDebugUnitTest --stacktrace
+
+      - name: Build Debug APK
+        run: ./gradlew assembleDebug --stacktrace
+
+      - name: Upload Debug APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: EliteChess-Debug-APK
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+      - name: Build Signed Release APK & AAB (Optional if Keystore Secret configured)
+        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
+        env:
+          KEYSTORE_PATH: ${{ runner.temp }}/release-upload-key.jks
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > "$KEYSTORE_PATH"
+          ./gradlew assembleRelease bundleRelease --stacktrace
+
+      - name: Upload Release APK & AAB Artifacts
+        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: EliteChess-Release-Outputs
+          path: |
+            app/build/outputs/apk/release/*.apk
+            app/build/outputs/bundle/release/*.aab

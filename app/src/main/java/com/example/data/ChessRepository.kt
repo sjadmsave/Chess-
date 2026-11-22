@@ -1,6 +1,7 @@
 package com.example.data
 
 import com.example.chess.BotPersona
+import com.example.chess.EnginePersonality
 import com.example.chess.GameResult
 import com.example.chess.MoveQuality
 import com.example.chess.PieceColor
@@ -9,6 +10,17 @@ import com.example.chess.RecordedMove
 import kotlinx.coroutines.flow.Flow
 import java.util.Calendar
 import kotlin.math.roundToInt
+
+fun formatOpponentTitle(botId: String): String {
+    if (botId.startsWith("custom:")) {
+        val parts = botId.split(":")
+        val personality = parts.getOrNull(1)?.let { EnginePersonality.byId(it) } ?: EnginePersonality.OPPORTUNITY_HUNTER
+        val elo = parts.getOrNull(2)?.toIntOrNull() ?: 1800
+        return "مخصص • نحو $elo إيلو • ${personality.nameAr}"
+    }
+    val bot = BotPersona.byId(botId)
+    return "${bot.nameAr} • ${bot.elo} ELO"
+}
 
 enum class ReportPeriod(val labelAr: String, val daysBack: Int?) {
     WEEKLY("أسبوعي", 7),
@@ -43,6 +55,7 @@ class ChessRepository(
 
     val ongoingGame: Flow<SavedGameEntity?> = savedGameDao.observeLatestOngoingGame()
     val completedGames: Flow<List<SavedGameEntity>> = savedGameDao.observeCompletedGames()
+    val allGames: Flow<List<SavedGameEntity>> = savedGameDao.observeAllGames()
     val ratingHistory: Flow<List<RatingPointEntity>> = ratingPointDao.observeAll()
     val puzzleRecords: Flow<List<PuzzleRecordEntity>> = puzzleRecordDao.observeAll()
     val achievements: Flow<List<AchievementEntity>> = achievementDao.observeAll()
@@ -86,6 +99,7 @@ class ChessRepository(
     suspend fun finalizeCompletedGame(
         existingId: Long?,
         bot: BotPersona,
+        botIdOverride: String? = null,
         playerColor: PieceColor,
         currentFen: String,
         moves: List<RecordedMove>,
@@ -95,9 +109,10 @@ class ChessRepository(
         solvedPuzzleCount: Int
     ): List<AchievementDef> {
         val now = System.currentTimeMillis()
+        val effectiveBotId = botIdOverride ?: bot.id
         val gameEntity = SavedGameEntity(
             id = existingId ?: 0L,
-            botId = bot.id,
+            botId = effectiveBotId,
             playerColor = playerColor.name,
             currentFen = currentFen,
             movesEncoded = MoveCodec.encode(moves),
@@ -116,8 +131,8 @@ class ChessRepository(
         )
         savedGameDao.upsert(gameEntity)
 
-        val won = (result == GameResult.WHITE_WINS_CHECKMATE || result == GameResult.BLACK_RESIGNED) && playerColor == PieceColor.WHITE ||
-            (result == GameResult.BLACK_WINS_CHECKMATE || result == GameResult.WHITE_RESIGNED) && playerColor == PieceColor.BLACK
+        val won = (result == GameResult.WHITE_WINS_CHECKMATE || result == GameResult.BLACK_RESIGNED || result == GameResult.BLACK_TIMEOUT) && playerColor == PieceColor.WHITE ||
+            (result == GameResult.BLACK_WINS_CHECKMATE || result == GameResult.WHITE_RESIGNED || result == GameResult.WHITE_TIMEOUT) && playerColor == PieceColor.BLACK
 
         val newElo = (currentElo + report.eloDelta).coerceIn(400, 2800)
         val xpGain = (if (won) 45 else 20) + (report.playerAccuracy / 4)
@@ -136,7 +151,7 @@ class ChessRepository(
                 blunders = blunders,
                 mistakes = mistakes,
                 won = won,
-                botId = bot.id
+                botId = effectiveBotId
             )
         )
 
