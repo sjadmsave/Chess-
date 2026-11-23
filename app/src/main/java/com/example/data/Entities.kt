@@ -1,7 +1,5 @@
 package com.example.data
 
-import androidx.room.Entity
-import androidx.room.PrimaryKey
 import com.example.chess.ChessMove
 import com.example.chess.GamePhase
 import com.example.chess.MoveQuality
@@ -10,9 +8,8 @@ import com.example.chess.PieceType
 import com.example.chess.RecordedMove
 import com.example.chess.Square
 
-@Entity(tableName = "saved_games")
 data class SavedGameEntity(
-    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val id: Long = 0,
     val botId: String,
     val playerColor: String, // "WHITE" or "BLACK"
     val currentFen: String,
@@ -28,12 +25,23 @@ data class SavedGameEntity(
     val middlegameAccuracy: Int,
     val endgameAccuracy: Int,
     val eloDelta: Int,
-    val updatedAt: Long
+    val updatedAt: Long,
+    val gameMode: String = "vs_engine",
+    val startFen: String = com.example.chess.ChessBoardState.INITIAL_FEN,
+    val timeControlId: String = "unlimited",
+    val whiteTimeSec: Long = 0L,
+    val blackTimeSec: Long = 0L,
+    val hintsUsed: Int = 0,
+    val assisted: Boolean = false,
+    val strengthMixed: Boolean = false,
+    val edited: Boolean = false,
+    val flipped: Boolean = false,
+    val reviewCacheKey: String = "",
+    val reviewCompleted: Boolean = false
 )
 
-@Entity(tableName = "rating_points")
 data class RatingPointEntity(
-    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val id: Long = 0,
     val timestamp: Long,
     val elo: Int,
     val accuracy: Int,
@@ -46,17 +54,15 @@ data class RatingPointEntity(
     val botId: String
 )
 
-@Entity(tableName = "puzzle_records")
 data class PuzzleRecordEntity(
-    @PrimaryKey val puzzleId: String,
+    val puzzleId: String,
     val solvedAt: Long,
     val usedHint: Boolean,
     val attempts: Int
 )
 
-@Entity(tableName = "achievements")
 data class AchievementEntity(
-    @PrimaryKey val id: String,
+    val id: String,
     val unlockedAt: Long
 )
 

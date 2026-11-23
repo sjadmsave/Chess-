@@ -12,12 +12,12 @@ object PgnFenCodec {
     fun parseFenStrict(rawFen: String): Result<ChessBoardState> {
         val trimmed = rawFen.trim()
         if (trimmed.isEmpty()) {
-            return Result.failure(IllegalArgumentException("نص FEN فارغ"))
+            return Result.failure(IllegalArgumentException("وضعية FEN غير صالحة"))
         }
         val parts = trimmed.split(Regex("\\s+"))
         val ranks = parts[0].split('/')
         if (ranks.size != 8) {
-            return Result.failure(IllegalArgumentException("يجب أن يحتوي FEN على 8 صفوف مفصولة بشرطة /"))
+            return Result.failure(IllegalArgumentException("وضعية FEN غير صالحة: يجب أن تحتوي على 8 صفوف"))
         }
         for ((idx, rank) in ranks.withIndex()) {
             var count = 0
@@ -25,16 +25,16 @@ object PgnFenCodec {
                 when {
                     ch in '1'..'8' -> count += ch - '0'
                     ChessPiece.fromFenChar(ch) != null -> count += 1
-                    else -> return Result.failure(IllegalArgumentException("رمز غير صالح في الصف ${idx + 1}: $ch"))
+                    else -> return Result.failure(IllegalArgumentException("وضعية FEN غير صالحة في الصف ${idx + 1}: $ch"))
                 }
             }
             if (count != 8) {
-                return Result.failure(IllegalArgumentException("الصف ${idx + 1} لا يساوي 8 مربعات"))
+                return Result.failure(IllegalArgumentException("وضعية FEN غير صالحة في الصف ${idx + 1}"))
             }
         }
         val state = ChessBoardState.fromFen(trimmed)
         if (state.findKing(PieceColor.WHITE) == null || state.findKing(PieceColor.BLACK) == null) {
-            return Result.failure(IllegalArgumentException("يجب أن تحتوي الوضعية على ملك أبيض وملك أسود"))
+            return Result.failure(IllegalArgumentException("وضعية FEN غير صالحة: يجب وجود الملكين"))
         }
         return Result.success(state)
     }
@@ -133,7 +133,7 @@ object PgnFenCodec {
 
     fun exportPgn(moves: List<RecordedMove>, whiteName: String = "Player", blackName: String = "Engine"): String {
         val sb = StringBuilder()
-        sb.append("[Event \"أرينا الشطرنج\"]\n")
+        sb.append("[Event \"رُقعة\"]\n")
         sb.append("[White \"$whiteName\"]\n")
         sb.append("[Black \"$blackName\"]\n\n")
         var idx = 0

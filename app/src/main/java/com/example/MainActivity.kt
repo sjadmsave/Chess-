@@ -28,7 +28,9 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ShowChart
 import androidx.compose.material.icons.automirrored.rounded.ShowChart
@@ -38,7 +40,9 @@ import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -47,6 +51,7 @@ import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -80,7 +85,9 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.example.chess.GameMode
 import com.example.chess.PieceColor
+import com.example.chess.StrengthTier
 import com.example.notifications.DailyReminderScheduler
 import com.example.overlay.FloatingChessService
 import com.example.ui.components.BoardCustomizationSheetContent
@@ -211,10 +218,14 @@ private fun EliteChessRoot(
     val achievements by viewModel.achievements.collectAsStateWithLifecycle()
     val selectedPeriod by viewModel.selectedPeriod.collectAsStateWithLifecycle()
     val periodicReport by viewModel.periodicReport.collectAsStateWithLifecycle()
+    val unassistedStatsOnly by viewModel.unassistedStatsOnly.collectAsStateWithLifecycle()
+    val engineStatsSummary by viewModel.engineStatsSummary.collectAsStateWithLifecycle()
     val matchState by viewModel.matchState.collectAsStateWithLifecycle()
     val puzzleState by viewModel.puzzleState.collectAsStateWithLifecycle()
     val stockfishStatus by viewModel.stockfishStatus.collectAsStateWithLifecycle()
     val lastEngineTelemetry by viewModel.lastEngineTelemetry.collectAsStateWithLifecycle()
+    val syzygyTables by viewModel.syzygyTables.collectAsStateWithLifecycle()
+    val syzygyStatusMessage by viewModel.syzygyStatusMessage.collectAsStateWithLifecycle()
 
     var showBoardCustomizationSheet by remember { mutableStateOf(false) }
     var showFloatingCustomizationSheet by remember { mutableStateOf(false) }
@@ -222,8 +233,24 @@ private fun EliteChessRoot(
     var showEngineEloDialog by remember { mutableStateOf(false) }
     var showImportDialog by remember { mutableStateOf(false) }
     var showFenSetupSheet by remember { mutableStateOf(false) }
+    var showAboutDialog by remember { mutableStateOf(false) }
 
     var pendingOverlayPayload by remember { mutableStateOf<Pair<String?, PieceColor?>?>(null) }
+    var pendingExportPgn by remember { mutableStateOf<String?>(null) }
+
+    val exportPgnLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/x-chess-pgn")
+    ) { uri ->
+        val pgnContent = pendingExportPgn
+        pendingExportPgn = null
+        if (uri != null && pgnContent != null) {
+            runCatching {
+                context.contentResolver.openOutputStream(uri)?.use { out ->
+                    out.write(pgnContent.toByteArray(Charsets.UTF_8))
+                }
+            }
+        }
+    }
 
     val overlayPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
@@ -248,6 +275,11 @@ private fun EliteChessRoot(
         }
     }
 
+    fun exportMatchPgnFile() {
+        pendingExportPgn = viewModel.exportCurrentGamePgn()
+        exportPgnLauncher.launch("Ruqaa.pgn")
+    }
+
     fun navigateTo(route: String) {
         navController.navigate(route) {
             popUpTo(navController.graph.findStartDestination().id) {
@@ -258,21 +290,25 @@ private fun EliteChessRoot(
         }
     }
 
-    // Handle external FEN returned from FloatingChessService ("فتح أرينا الشطرنج")
     LaunchedEffect(incomingExternalFen) {
         val payload = incomingExternalFen ?: return@LaunchedEffect
         viewModel.startCustomEngineMatch(
             playerColor = payload.second,
-            startFen = payload.first
+            startFen = payload.first,
+            edited = true
         )
         navigateTo(ROUTE_PLAY)
         onConsumedExternalFen()
     }
 
-    // Auto-show floating overlay when app minimizes if preference enabled & permission granted
-    DisposableEffect(lifecycleOwner, prefs.floatingAutoShow) {
+    // Auto-show floating overlay when minimizing app while a game is ongoing
+    DisposableEffect(lifecycleOwner, prefs.floatingAutoShow, matchState.gameResult) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_STOP && prefs.floatingAutoShow && FloatingChessService.canDrawOverlay(context)) {
+            if (event == Lifecycle.Event.ON_STOP &&
+                prefs.floatingAutoShow &&
+                matchState.gameResult.isOngoing &&
+                FloatingChessService.canDrawOverlay(context)
+            ) {
                 val activity = context as? ComponentActivity
                 if (activity?.isChangingConfigurations != true) {
                     FloatingChessService.launch(
@@ -345,6 +381,10 @@ private fun EliteChessRoot(
                                     viewModel.startNewMatch(bot, color, adaptive, timeControl)
                                     navigateTo(ROUTE_PLAY)
                                 },
+                                onStartLocalMatch = { timeControl ->
+                                    viewModel.startLocalTwoPlayerMatch(timeControl = timeControl)
+                                    navigateTo(ROUTE_PLAY)
+                                },
                                 onResumeGame = { saved ->
                                     viewModel.resumeSavedGame(saved)
                                     navigateTo(ROUTE_PLAY)
@@ -360,7 +400,8 @@ private fun EliteChessRoot(
                                     viewModel.loadDailyPuzzle()
                                     navigateTo(ROUTE_PUZZLES)
                                 },
-                                onOpenStats = { navigateTo(ROUTE_STATS) }
+                                onOpenStats = { navigateTo(ROUTE_STATS) },
+                                onOpenAboutLicenses = { showAboutDialog = true }
                             )
                         }
 
@@ -387,6 +428,10 @@ private fun EliteChessRoot(
                                     }
                                     navigateTo(ROUTE_PLAY)
                                 },
+                                onAnalyzeMultiPvPosition = {
+                                    navigateTo(ROUTE_PLAY)
+                                    viewModel.analyzeDisplayedPositionMultiPv()
+                                },
                                 onOpenImportDialog = { showImportDialog = true },
                                 onOpenPuzzles = { navigateTo(ROUTE_PUZZLES) },
                                 onOpenSavedArchive = { navigateTo(ROUTE_ARCHIVE) }
@@ -397,9 +442,12 @@ private fun EliteChessRoot(
                             SettingsScreen(
                                 prefs = prefs,
                                 stockfishStatus = stockfishStatus,
+                                syzygyTables = syzygyTables,
+                                syzygyStatusMessage = syzygyStatusMessage,
                                 onSelectThemeMode = { viewModel.setThemeMode(it) },
                                 onSelectBoardTheme = { viewModel.setBoardTheme(it) },
                                 onOpenBoardCustomization = { showBoardCustomizationSheet = true },
+                                onSelectStrengthTier = { viewModel.setStrengthTier(it) },
                                 onOpenEngineEloDialog = { showEngineEloDialog = true },
                                 onToggleHumanStyle = { viewModel.setHumanStyleEnabled(it) },
                                 onOpenPersonalitySheet = { showPersonalitySheet = true },
@@ -416,12 +464,19 @@ private fun EliteChessRoot(
                                 },
                                 onOpenFloatingCustomization = { showFloatingCustomizationSheet = true },
                                 onToggleSound = { viewModel.setSoundEnabled(it) },
+                                onSelectSoundProfile = { viewModel.setSoundProfile(it) },
+                                onChangeSoundVolume = { viewModel.setSoundVolume(it) },
                                 onToggleHaptics = { viewModel.setHapticsEnabled(it) },
+                                onSelectVibrationStyle = { viewModel.setVibrationStyle(it) },
                                 onToggleAutoReview = { viewModel.setAutoReviewAfterGame(it) },
                                 onUpdateReminders = { enabled, hr, min ->
                                     viewModel.updateReminderSettings(enabled, hr, min)
                                 },
-                                onTestNotification = { viewModel.sendTestNotification() }
+                                onTestNotification = { viewModel.sendTestNotification() },
+                                onImportSyzygyFiles = { uris -> viewModel.importSyzygyFiles(uris) },
+                                onDeleteSyzygyTable = { name -> viewModel.deleteSyzygyTable(name) },
+                                onClearSyzygyTables = { viewModel.clearSyzygyTables() },
+                                onOpenAboutLicenses = { showAboutDialog = true }
                             )
                         }
 
@@ -437,22 +492,33 @@ private fun EliteChessRoot(
                                 onUndo = { viewModel.undoLastTurn() },
                                 onFlipBoard = { viewModel.toggleBoardFlip() },
                                 onResign = { viewModel.resignMatch() },
+                                onClaimDraw = { viewModel.claimDraw() },
                                 onSelectReviewMove = { viewModel.selectReviewMove(it) },
                                 onOpenMoveLedger = { viewModel.openMoveLedgerSheet() },
                                 onDismissMoveLedger = { viewModel.dismissMoveLedgerSheet() },
                                 onOpenPostGameSheet = { viewModel.openPostGameSheet() },
                                 onDismissPostGameSheet = { viewModel.dismissPostGameSheet() },
+                                onStartOrResumeFullReview = { viewModel.startOrResumeFullReview() },
+                                onPauseFullReview = { viewModel.pauseFullReview() },
+                                onAnalyzeMultiPv = { viewModel.analyzeDisplayedPositionMultiPv() },
+                                onExportPgn = { exportMatchPgnFile() },
                                 onStartRematch = {
-                                    if (matchState.usingCustomEngine) {
-                                        viewModel.startCustomEngineMatch(
+                                    when (matchState.gameMode) {
+                                        GameMode.LOCAL_TWO_PLAYER -> viewModel.startLocalTwoPlayerMatch(
+                                            timeControl = matchState.timeControl,
+                                            startFen = matchState.customStartFen,
+                                            edited = matchState.editedPosition
+                                        )
+                                        GameMode.VS_ENGINE -> viewModel.startCustomEngineMatch(
                                             playerColor = matchState.playerColor,
                                             targetElo = matchState.customEngineElo,
                                             personality = matchState.customPersonality,
                                             humanStyle = matchState.humanStyle,
-                                            timeControl = matchState.timeControl
+                                            timeControl = matchState.timeControl,
+                                            startFen = matchState.customStartFen,
+                                            edited = matchState.editedPosition
                                         )
-                                    } else {
-                                        viewModel.startNewMatch(
+                                        GameMode.VS_BOT_PERSONA -> viewModel.startNewMatch(
                                             bot = matchState.bot,
                                             playerColor = matchState.playerColor,
                                             adaptiveMode = prefs.adaptiveMode,
@@ -488,7 +554,10 @@ private fun EliteChessRoot(
                                 ratingHistory = ratingHistory,
                                 completedGames = completedGames,
                                 achievements = achievements,
+                                unassistedOnly = unassistedStatsOnly,
+                                engineStatsSummary = engineStatsSummary,
                                 onSelectPeriod = { viewModel.selectReportPeriod(it) },
+                                onToggleUnassistedOnly = { viewModel.setUnassistedStatsOnly(it) },
                                 onReviewSavedGame = { saved ->
                                     viewModel.resumeSavedGame(saved)
                                     navigateTo(ROUTE_PLAY)
@@ -498,7 +567,7 @@ private fun EliteChessRoot(
                     }
                 }
 
-                // Floating Pill Bottom Navigation Bar (Matches Screenshots 1, 4, 5, 8)
+                // Floating Pill Bottom Navigation Bar
                 if (!useRail && !hideBottomNav) {
                     FloatingBottomNavPill(
                         currentRoute = currentRoute,
@@ -546,7 +615,7 @@ private fun EliteChessRoot(
         }
     }
 
-    // 3. Engine Personality Selection Sheet (10 Personalities)
+    // 3. Engine Personality Selection Sheet (13 Personalities + Intensity & Risk)
     if (showPersonalitySheet) {
         val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         ModalBottomSheet(
@@ -555,17 +624,23 @@ private fun EliteChessRoot(
         ) {
             EnginePersonalitySheetContent(
                 selectedPersonality = prefs.enginePersonality,
-                onSelect = { viewModel.setEnginePersonality(it) },
+                intensity = prefs.personalityIntensity,
+                risk = prefs.personalityRisk,
+                onSelectPersonality = { viewModel.setEnginePersonality(it) },
+                onIntensityChange = { viewModel.setPersonalityIntensity(it) },
+                onSelectRisk = { viewModel.setPersonalityRisk(it) },
                 onDismiss = { showPersonalitySheet = false }
             )
         }
     }
 
-    // 4. Custom Engine ELO Dialog (200 - 3000 ELO)
+    // 4. Custom Engine ELO Dialog (5 Tiers + Unlimited + 200..3000)
     if (showEngineEloDialog) {
         EngineEloDialog(
-            initialElo = prefs.customEngineElo,
-            onConfirm = { viewModel.setCustomEngineElo(it) },
+            initialElo = prefs.effectiveEngineElo,
+            initialTier = prefs.effectiveStrengthTier,
+            onConfirmPreset = { tier -> viewModel.setStrengthTier(tier) },
+            onConfirmCustomElo = { elo -> viewModel.setCustomEngineElo(elo) },
             onDismiss = { showEngineEloDialog = false }
         )
     }
@@ -591,17 +666,92 @@ private fun EliteChessRoot(
             FenBoardSetupSheetContent(
                 boardTheme = prefs.boardTheme,
                 pieceStyle = prefs.pieceStyle,
-                onStartFromFen = { fen, color ->
-                    viewModel.startCustomEngineMatch(
-                        playerColor = color,
-                        startFen = fen
-                    )
+                onStartFromFen = { fen, color, twoPlayer ->
+                    if (twoPlayer) {
+                        viewModel.startLocalTwoPlayerMatch(startFen = fen, edited = true)
+                    } else {
+                        viewModel.startCustomEngineMatch(
+                            playerColor = color,
+                            startFen = fen,
+                            edited = true
+                        )
+                    }
                     navigateTo(ROUTE_PLAY)
                 },
                 onDismiss = { showFenSetupSheet = false }
             )
         }
     }
+
+    // 7. About Ruqaa & Open Source Licenses Dialog
+    if (showAboutDialog) {
+        AboutRuqaaDialog(onDismiss = { showAboutDialog = false })
+    }
+}
+
+@Composable
+private fun AboutRuqaaDialog(onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text("حول رُقعة والتراخيص", fontWeight = FontWeight.Bold)
+        },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = "تطبيق رُقعة للشطرنج • الإصدار 3.2.3",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "يعمل التطبيق بالكامل دون اتصال بالإنترنت (Offline ١٠٠٪) ودون جمع أي بيانات شخصية أو تتبع. تبقى المباريات وجداول النهايات محفوظة محليًا على جهازك فقط.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                HorizontalDivider()
+                Text(
+                    text = "محرك Stockfish 19 (ترخيص GPLv3)",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "يعتمد التحليل العميق واللعب المخصّص على محرك Stockfish الحر مفتوح المصدر بموجب رخصة GNU GPL v3. مساهمو Stockfish (AUTHORS): Tord Romstad, Marco Costalba, Joona Kiiski, Gary Linscott وفريق المطوّرين والمختبرين عبر Fishtest.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                HorizontalDivider()
+                Text(
+                    text = "جداول Syzygy لنهايات اللعب",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "يدعم التطبيق استيراد جداول Syzygy (.rtbw و .rtbz) حتى ٦ قطع عبر مستكشف الملفات المحلي (SAF) لقراءتها محليًا.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                HorizontalDivider()
+                Text(
+                    text = "خط IBM Plex Sans Arabic (رخصة SIL OFL 1.1)",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "الخط العربي المدمج في الواجهة: IBM Plex Sans Arabic بأوزان 400 و 600 وفق ترخيص SIL Open Font License 1.1.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("إغلاق", fontWeight = FontWeight.Bold)
+            }
+        }
+    )
 }
 
 @Composable

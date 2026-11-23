@@ -1,7 +1,12 @@
 package com.example.chess
 
+import java.util.concurrent.ThreadLocalRandom
+import kotlin.math.abs
+import kotlin.math.exp
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.pow
+import kotlin.math.roundToInt
 import kotlin.random.Random
 
 object ChessEngine {
@@ -25,7 +30,49 @@ object ChessEngine {
         val sourceName: String = "المحرك المدمج (TT + PVS + LMR)"
     )
 
-    // Deterministic 64-bit Zobrist tables (Stockfish-style transposition keys)
+    data class CandidateMoveEval(
+        val move: ChessMove,
+        val scoreSideCp: Int,
+        val evalWhiteCp: Int,
+        val mateIn: Int? = null,
+        val pvUci: List<String> = emptyList(),
+        val depth: Int = 1,
+        val nodes: Int = 0
+    )
+
+    /** Ruqaa Section 6.2 Strength Translation Formulas **/
+    fun computeNodeCap(elo: Int): Int? {
+        if (elo <= 0) return null // "بلا حد"
+        if (elo < 1320) return 7 * elo + 3000
+        return min(240_000, (18000.0 * 2.0.pow((elo - 1320) / 450.0)).toInt())
+    }
+
+    fun computeBaseMoveTimeMs(elo: Int): Int {
+        if (elo <= 0) return 1100
+        return min(1100, elo / 3 + 250)
+    }
+
+    fun computeMoveTimeWithClockMs(elo: Int, remainingMs: Long?): Int {
+        val base = computeBaseMoveTimeMs(elo)
+        if (remainingMs == null || remainingMs <= 0L) return base
+        return max(80, min(base, (remainingMs / 12L).toInt()))
+    }
+
+    fun computeStockfishProbability(elo: Int): Double {
+        if (elo <= 0 || elo >= 1320) return 1.0
+        return (((elo - 200).coerceAtLeast(0)) / 1120.0).pow(1.8)
+    }
+
+    fun computePersonalityLossCapCp(
+        tier: StrengthTier,
+        risk: PersonalityRisk,
+        intensity: Int
+    ): Int {
+        val normIntensity = intensity.coerceIn(0, 100) / 100.0
+        return (tier.personalityBaseCapCp * risk.multiplier * (0.35 + 0.65 * normIntensity)).roundToInt()
+    }
+
+    // Deterministic 64-bit Zobrist tables
     private val ZOBRIST_PIECE = Array(12) { LongArray(64) }
     private val ZOBRIST_CASTLING = LongArray(16)
     private val ZOBRIST_EP_FILE = LongArray(8)
@@ -47,7 +94,6 @@ object ChessEngine {
         ZOBRIST_BLACK_TURN = rng.nextLong()
     }
 
-    // Tapered Piece-Square Tables (White's perspective, index 0 = a8 .. 63 = h1)
     private val PAWN_MG_PST = intArrayOf(
         0,  0,  0,  0,  0,  0,  0,  0,
         55, 55, 55, 55, 55, 55, 55, 55,
@@ -141,7 +187,7 @@ object ChessEngine {
         val scores = IntArray(TT_SIZE)
         val depths = ByteArray(TT_SIZE)
         val flags = ByteArray(TT_SIZE)
-        val bestMoves = IntArray(TT_SIZE) // packed: ((from.index + 1) shl 6) or to.index
+        val bestMoves = IntArray(TT_SIZE)
 
         fun packMove(move: ChessMove): Int = ((move.from.index + 1) shl 6) or move.to.index
 
@@ -168,7 +214,8 @@ object ChessEngine {
     private class SearchContext(
         val startTimeMs: Long,
         val timeLimitMs: Long,
-        val aggression: Float
+        val aggression: Float,
+        val maxNodes: Int? = null
     ) {
         var nodes = 0
         var timedOut = false
@@ -177,7 +224,11 @@ object ChessEngine {
         val history = Array(2) { Array(64) { IntArray(64) } }
 
         fun checkTime(): Boolean {
-            if ((nodes and 1023) == 0) {
+            if (maxNodes != null && nodes >= maxNodes) {
+                timedOut = true
+                return true
+            }
+            if ((nodes and 511) == 0) {
                 if (System.currentTimeMillis() - startTimeMs >= timeLimitMs) {
                     timedOut = true
                 }
@@ -266,7 +317,7 @@ object ChessEngine {
                     val topScore = scoredMoves[0].second
                     val candidates = scoredMoves.filter { topScore - it.second <= effectiveNoise }
                     val chosen = if (candidates.size > 1 && topScore < MATE_SCORE - 500) {
-                        candidates[Random.nextInt(candidates.size)]
+                        candidates[ThreadLocalRandom.current().nextInt(candidates.size)]
                     } else {
                         scoredMoves[0]
                     }
@@ -290,12 +341,25 @@ object ChessEngine {
         )
     }
 
+    /**
+     * Full Ruqaa Engine Selection (Sections 6 & 7):
+     * - Plays forced single legal move immediately
+     * - Under 1320 Elo: probabilistic switch between heuristic player & Stockfish/search
+     * - ShortMateProof for OPPORTUNITY_HUNTER & mate delay for LONG_GAME_MAKER
+     * - Personality layer (0..100 intensity, Conservative/Balanced/Aggressive risk)
+     * - Human Style softmax layer for limited Elo levels
+     */
     fun chooseCustomEngineMove(
         state: ChessBoardState,
         targetElo: Int,
         personality: EnginePersonality,
         humanStyle: Boolean,
-        moveTimeMs: Int = 900
+        moveTimeMs: Int = computeBaseMoveTimeMs(targetElo),
+        personalityIntensity: Int = 50,
+        personalityRisk: PersonalityRisk = PersonalityRisk.BALANCED,
+        gameSeed: Long = 0x52757161L,
+        lastMoveFromWing: Int? = null,
+        lastMovedPieceType: PieceType? = null
     ): SearchResult {
         val legalMoves = state.generateLegalMoves()
         if (legalMoves.isEmpty()) {
@@ -309,89 +373,641 @@ object ChessEngine {
                 evalWhiteCp = evaluateWhitePerspective(next, personality.aggressionWeight),
                 depthReached = 1,
                 nodesSearched = 1,
-                pvUci = listOf(legalMoves[0].toUci())
+                pvUci = listOf(legalMoves[0].toUci()),
+                sourceName = "نقلة وحيدة قانونية"
             )
         }
 
-        if (humanStyle && state.fullMoveNumber <= 2) {
-            val openingPool = when (personality) {
-                EnginePersonality.FIERCE_WARRIOR, EnginePersonality.SACRIFICE_KING -> listOf("e2e4", "d2d4", "f2f4")
-                EnginePersonality.IRON_FORTRESS, EnginePersonality.PATIENT_SERPENT -> listOf("d2d4", "c2c4", "g1f3")
-                else -> listOf("e2e4", "d2d4", "c2c4", "g1f3")
-            }
-            val candidate = if (state.turn == PieceColor.WHITE) {
-                openingPool.mapNotNull { u -> legalMoves.find { it.toUci() == u } }.randomOrNull()
-            } else {
-                listOf("e7e5", "c7c5", "e7e6", "d7d5", "g8f6").mapNotNull { u -> legalMoves.find { it.toUci() == u } }.randomOrNull()
-            }
-            if (candidate != null) {
-                val next = state.copyWithMoveFast(candidate)
+        // Opportunity Hunter short mate proof (mate <= 3, max 150ms, max 65k nodes)
+        if (personality == EnginePersonality.OPPORTUNITY_HUNTER && personalityIntensity > 0) {
+            findShortMateMove(state, maxMoves = 3, maxTimeMs = 150L, maxNodes = 65_000)?.let { mateMove ->
+                val next = state.copyWithMoveFast(mateMove)
                 return SearchResult(
-                    bestMove = candidate,
-                    evalWhiteCp = evaluateWhitePerspective(next, personality.aggressionWeight),
-                    depthReached = 1,
-                    nodesSearched = 1,
-                    pvUci = listOf(candidate.toUci()),
-                    sourceName = "المحرك المدمج (كتاب الافتتاحيات)"
+                    bestMove = mateMove,
+                    evalWhiteCp = if (state.turn == PieceColor.WHITE) MATE_SCORE - 2 else -(MATE_SCORE - 2),
+                    depthReached = 5,
+                    nodesSearched = 1500,
+                    pvUci = listOf(mateMove.toUci()),
+                    sourceName = "صائد الفرص (كشف مات قصير)"
+                )
+            }
+        }
+
+        // Sub-1320 heuristic probability check (Ruqaa Section 6.2 & 6.5)
+        if (targetElo in 1 until 1320) {
+            val pStockfish = computeStockfishProbability(targetElo)
+            if (ThreadLocalRandom.current().nextDouble() > pStockfish) {
+                return chooseHeuristicMove(
+                    state = state,
+                    elo = targetElo,
+                    personality = personality,
+                    intensity = personalityIntensity
                 )
             }
         }
 
         val depth = when {
-            targetElo < 700 -> 1
-            targetElo < 1200 -> 2
-            targetElo < 1750 -> 3
-            targetElo < 2250 -> 4
-            else -> 6
+            targetElo <= 0 -> 5
+            targetElo < 700 -> 2
+            targetElo < 1320 -> 3
+            targetElo < 2000 -> 4
+            else -> 5
         }
-        val baseNoise = when {
-            targetElo < 600 -> 170
-            targetElo < 950 -> 105
-            targetElo < 1300 -> 55
-            targetElo < 1700 -> 28
-            targetElo < 2200 -> 12
-            else -> 0
-        }
-        val noise = if (humanStyle) baseNoise else (baseNoise / 2)
-        val timeLimitMs = when {
-            depth <= 1 -> min(moveTimeMs.toLong(), 250L)
-            depth == 2 -> min(moveTimeMs.toLong(), 450L)
-            else -> moveTimeMs.coerceIn(300, 3500).toLong()
-        }
+        val nodeCap = computeNodeCap(targetElo)
+        val timeLimitMs = min(moveTimeMs.toLong(), computeBaseMoveTimeMs(targetElo).toLong()).coerceAtLeast(80L)
+        val ctx = SearchContext(System.currentTimeMillis(), timeLimitMs, personality.aggressionWeight, maxNodes = nodeCap)
 
-        val ctx = SearchContext(System.currentTimeMillis(), timeLimitMs, personality.aggressionWeight)
-        var bestMove = legalMoves[0]
-        var bestScoreSide = 0
+        var lastScored: List<Pair<ChessMove, Int>> = emptyList()
         var reached = 1
-
         for (d in 1..depth) {
             val scoredMoves = scoreRootMoves(state, legalMoves, d, ctx)
             if (ctx.timedOut && d > 1) break
-            reached = d
             if (scoredMoves.isNotEmpty()) {
-                if (noise > 0 && d == depth) {
-                    val topScore = scoredMoves[0].second
-                    val candidates = scoredMoves.filter { topScore - it.second <= noise }
-                    val chosen = if (candidates.size > 1 && topScore < MATE_SCORE - 500) {
-                        candidates[Random.nextInt(candidates.size)]
-                    } else scoredMoves[0]
-                    bestMove = chosen.first
-                    bestScoreSide = chosen.second
-                } else {
-                    bestMove = scoredMoves[0].first
-                    bestScoreSide = scoredMoves[0].second
-                }
+                lastScored = scoredMoves
+                reached = d
             }
         }
-        val evalWhiteCp = if (state.turn == PieceColor.WHITE) bestScoreSide else -bestScoreSide
-        val pv = extractPvLine(state, bestMove, ctx.tt, maxPlies = 6)
-        return SearchResult(
-            bestMove = bestMove,
-            evalWhiteCp = evalWhiteCp,
-            depthReached = reached,
-            nodesSearched = ctx.nodes,
-            pvUci = pv
+
+        if (lastScored.isEmpty()) {
+            val fallback = legalMoves[0]
+            return SearchResult(
+                bestMove = fallback,
+                evalWhiteCp = evaluateWhitePerspective(state.copyWithMoveFast(fallback), 1.0f),
+                depthReached = 1,
+                nodesSearched = ctx.nodes,
+                pvUci = listOf(fallback.toUci())
+            )
+        }
+
+        val candidates = lastScored.take(6).map { (mv, sc) ->
+            CandidateMoveEval(
+                move = mv,
+                scoreSideCp = sc,
+                evalWhiteCp = if (state.turn == PieceColor.WHITE) sc else -sc,
+                pvUci = extractPvLine(state, mv, ctx.tt, maxPlies = 5),
+                depth = reached,
+                nodes = ctx.nodes
+            )
+        }
+
+        return selectFromCandidates(
+            state = state,
+            candidates = candidates,
+            targetElo = targetElo,
+            personality = personality,
+            humanStyle = humanStyle,
+            personalityIntensity = personalityIntensity,
+            personalityRisk = personalityRisk,
+            gameSeed = gameSeed,
+            lastMoveFromWing = lastMoveFromWing,
+            lastMovedPieceType = lastMovedPieceType,
+            sourceLabel = "المحرك المدمج (TT + PVS + LMR)"
         )
+    }
+
+    /**
+     * Ruqaa Section 6.5: Heuristic player under 1320 Elo.
+     */
+    fun chooseHeuristicMove(
+        state: ChessBoardState,
+        elo: Int,
+        personality: EnginePersonality = EnginePersonality.CLASSIC,
+        intensity: Int = 50
+    ): SearchResult {
+        val legal = state.generateLegalMoves()
+        if (legal.isEmpty()) {
+            return SearchResult(null, evaluateWhitePerspective(state, 1.0f), 0, 1)
+        }
+        if (legal.size == 1) {
+            val mv = legal[0]
+            return SearchResult(mv, evaluateWhitePerspective(state.copyWithMoveFast(mv), 1.0f), 1, 1, listOf(mv.toUci()))
+        }
+
+        val s = ((elo.coerceIn(200, 1320) - 200.0) / 1120.0).coerceIn(0.0, 1.0)
+        val backRow = if (state.turn == PieceColor.WHITE) 7 else 0
+        val forwardDir = if (state.turn == PieceColor.WHITE) -1 else 1
+        val normI = intensity.coerceIn(0, 100) / 100.0
+
+        val scored = legal.map { move ->
+            val piece = state.pieceAt(move.from)
+            val pieceVal = piece?.type?.valueCp ?: 100
+            val after = state.copyWithMoveFast(move)
+            var score = 0.0
+
+            // Capture (2/3 value, max 180)
+            move.capturedPiece?.let { cap ->
+                score += (cap.type.valueCp * 2.0 / 3.0).coerceAtMost(180.0)
+            }
+            // Promotion
+            move.promotion?.let { promo ->
+                score += promo.valueCp / 3.0
+            }
+            // Center c3..f6 (+15)
+            if (move.to.row in 2..5 && move.to.col in 2..5) {
+                score += 15.0
+            }
+            // Pawn advance (+5 per rank)
+            if (piece?.type == PieceType.PAWN) {
+                val rankSteps = (move.to.row - move.from.row) * forwardDir
+                if (rankSteps > 0) score += 5.0 * rankSteps
+            }
+            // Minor piece development off back rank (+18)
+            if ((piece?.type == PieceType.KNIGHT || piece?.type == PieceType.BISHOP) &&
+                move.from.row == backRow && move.to.row != backRow
+            ) {
+                score += 18.0
+            }
+            // Check (+20)
+            val givesCheck = after.isInCheck(after.turn)
+            if (givesCheck) {
+                score += 20.0
+            }
+            // Hanging penalty after move
+            if (after.isSquareAttacked(move.to, after.turn)) {
+                val defended = after.isSquareAttacked(move.to, state.turn)
+                val baseHang = pieceVal / (if (defended) 7.0 else 3.0)
+                score -= baseHang * (0.8 * s + 0.2)
+            }
+            // Personality feature clamped [-16, +16] * I
+            if (personality != EnginePersonality.CLASSIC && intensity > 0) {
+                val rawFeature = computePersonalityFeatureScore(
+                    stateBefore = state,
+                    afterState = after,
+                    move = move,
+                    givesCheck = givesCheck,
+                    personality = personality,
+                    evalSideBeforeCp = 0,
+                    gameSeed = 0L,
+                    lastMoveFromWing = null,
+                    lastMovedPieceType = null
+                )
+                score += rawFeature.coerceIn(-16.0, 16.0) * normI
+            }
+            move to score
+        }.sortedByDescending { it.second }
+
+        val bestScore = scored[0].second
+        val cutoff = 290.0 - 180.0 * s
+        val eligible = scored.filter { bestScore - it.second <= cutoff }
+        val temp = (110.0 - 65.0 * s).coerceAtLeast(10.0)
+        val chosen = softmaxSample(eligible, temp) { it.second }
+
+        val next = state.copyWithMoveFast(chosen.first)
+        return SearchResult(
+            bestMove = chosen.first,
+            evalWhiteCp = evaluateWhitePerspective(next, 1.0f),
+            depthReached = 1,
+            nodesSearched = legal.size,
+            pvUci = listOf(chosen.first.toUci()),
+            sourceName = "اللاعب الإرشادي (تحت ١٣٢٠ إيلو)"
+        )
+    }
+
+    /**
+     * Applies Ruqaa Section 6.4 Human Style + Section 7 Personality selection on any MultiPV list
+     * (whether produced by native Stockfish UCI or built-in search).
+     */
+    fun selectFromCandidates(
+        state: ChessBoardState,
+        candidates: List<CandidateMoveEval>,
+        targetElo: Int,
+        personality: EnginePersonality,
+        humanStyle: Boolean,
+        personalityIntensity: Int,
+        personalityRisk: PersonalityRisk,
+        gameSeed: Long = 0x52757161L,
+        lastMoveFromWing: Int? = null,
+        lastMovedPieceType: PieceType? = null,
+        sourceLabel: String = "Stockfish UCI"
+    ): SearchResult {
+        if (candidates.isEmpty()) {
+            val legal = state.generateLegalMoves()
+            val mv = legal.firstOrNull()
+            return SearchResult(mv, evaluateWhitePerspective(state, 1.0f), 1, 1, sourceName = sourceLabel)
+        }
+        val sorted = candidates.sortedByDescending { it.scoreSideCp }
+        val top = sorted[0]
+        val tier = StrengthTier.fromElo(targetElo)
+        val isUnlimited = targetElo <= 0
+
+        // Personality layer if enabled and intensity > 0
+        if (personality != EnginePersonality.CLASSIC && personalityIntensity > 0) {
+            // Immediate mate check (except LONG_GAME_MAKER delaying forced mate when intensity >= 25)
+            val immediateMate = sorted.find { it.mateIn != null && it.mateIn == 1 }
+            if (immediateMate != null && !(personality == EnginePersonality.LONG_GAME_MAKER && personalityIntensity >= 25)) {
+                return SearchResult(
+                    bestMove = immediateMate.move,
+                    evalWhiteCp = immediateMate.evalWhiteCp,
+                    depthReached = immediateMate.depth,
+                    nodesSearched = immediateMate.nodes,
+                    pvUci = immediateMate.pvUci,
+                    sourceName = "$sourceLabel • ${personality.nameAr}"
+                )
+            }
+
+            val normI = personalityIntensity.coerceIn(0, 100) / 100.0
+            val lossCap = computePersonalityLossCapCp(tier, personalityRisk, personalityIntensity)
+
+            val filtered = sorted.filter { cand ->
+                val loss = (top.scoreSideCp - cand.scoreSideCp).coerceAtLeast(0)
+                if (personality == EnginePersonality.LONG_GAME_MAKER &&
+                    personalityIntensity >= 25 &&
+                    top.scoreSideCp >= 200 &&
+                    cand.mateIn != null && cand.mateIn > 0
+                ) {
+                    // Prefer delaying forced mate if non-mating move exists in cap
+                    false
+                } else {
+                    loss <= lossCap
+                }
+            }.ifEmpty { listOf(top) }
+
+            val topComposite = scoreWithPersonality(
+                state, top, top.scoreSideCp, personality, normI, gameSeed, lastMoveFromWing, lastMovedPieceType
+            )
+            var bestPick = top
+            var bestComposite = topComposite
+
+            for (cand in filtered) {
+                if (cand.move == top.move) continue
+                val sc = scoreWithPersonality(
+                    state, cand, top.scoreSideCp, personality, normI, gameSeed, lastMoveFromWing, lastMovedPieceType
+                )
+                if (sc - topComposite > 0.75 && sc > bestComposite) {
+                    bestComposite = sc
+                    bestPick = cand
+                }
+            }
+
+            if (bestPick.move != top.move) {
+                return SearchResult(
+                    bestMove = bestPick.move,
+                    evalWhiteCp = bestPick.evalWhiteCp,
+                    depthReached = bestPick.depth,
+                    nodesSearched = bestPick.nodes,
+                    pvUci = bestPick.pvUci,
+                    sourceName = "$sourceLabel • ${personality.nameAr}"
+                )
+            }
+        }
+
+        // Human Style Layer (limited levels only)
+        if (humanStyle && !isUnlimited && sorted.size > 1) {
+            val inCheck = state.isInCheck(state.turn)
+            val halve = inCheck || (tier.ordinal >= StrengthTier.MEDIUM.ordinal && top.scoreSideCp >= 150)
+            val effTol = if (halve) tier.humanToleranceCp / 2 else tier.humanToleranceCp
+            val effTemp = (if (halve) tier.humanTemperature / 2 else tier.humanTemperature).coerceAtLeast(4)
+
+            val window = sorted.filter { (top.scoreSideCp - it.scoreSideCp) <= effTol }
+            if (window.size > 1 && top.scoreSideCp < MATE_SCORE - 500) {
+                val chosen = softmaxSample(window, effTemp.toDouble()) { cand ->
+                    val loss = (top.scoreSideCp - cand.scoreSideCp).coerceAtLeast(0)
+                    val bonus = computeHumanStyleBonus(state, cand.move)
+                    bonus - loss.toDouble()
+                }
+                return SearchResult(
+                    bestMove = chosen.move,
+                    evalWhiteCp = chosen.evalWhiteCp,
+                    depthReached = chosen.depth,
+                    nodesSearched = chosen.nodes,
+                    pvUci = chosen.pvUci,
+                    sourceName = "$sourceLabel • أسلوب بشري"
+                )
+            }
+        }
+
+        return SearchResult(
+            bestMove = top.move,
+            evalWhiteCp = top.evalWhiteCp,
+            depthReached = top.depth,
+            nodesSearched = top.nodes,
+            pvUci = top.pvUci,
+            sourceName = sourceLabel
+        )
+    }
+
+    private fun scoreWithPersonality(
+        state: ChessBoardState,
+        cand: CandidateMoveEval,
+        bestScoreSideCp: Int,
+        personality: EnginePersonality,
+        normI: Double,
+        gameSeed: Long,
+        lastMoveFromWing: Int?,
+        lastMovedPieceType: PieceType?
+    ): Double {
+        val after = state.copyWithMoveFast(cand.move)
+        val givesCheck = after.isInCheck(after.turn)
+        val loss = (bestScoreSideCp - cand.scoreSideCp).coerceAtLeast(0)
+        val features = computePersonalityFeatureScore(
+            stateBefore = state,
+            afterState = after,
+            move = cand.move,
+            givesCheck = givesCheck,
+            personality = personality,
+            evalSideBeforeCp = bestScoreSideCp,
+            gameSeed = gameSeed,
+            lastMoveFromWing = lastMoveFromWing,
+            lastMovedPieceType = lastMovedPieceType
+        )
+        return features * normI - (1.14 - 0.34 * normI) * loss
+    }
+
+    private fun computeHumanStyleBonus(state: ChessBoardState, move: ChessMove): Double {
+        val piece = state.pieceAt(move.from) ?: return 0.0
+        val after = state.copyWithMoveFast(move)
+        var bonus = 0.0
+
+        // Center control
+        if (move.to.row in 2..5 && move.to.col in 2..5) bonus += 12.0
+        if (move.to.row in 3..4 && move.to.col in 3..4) bonus += 8.0
+
+        // First 12 moves: minor development + castling + delay queen
+        if (state.fullMoveNumber <= 12) {
+            val backRow = if (state.turn == PieceColor.WHITE) 7 else 0
+            if ((piece.type == PieceType.KNIGHT || piece.type == PieceType.BISHOP) &&
+                move.from.row == backRow && move.to.row != backRow
+            ) {
+                bonus += 16.0
+            }
+            if (move.isCastleKingside || move.isCastleQueenside) {
+                bonus += 24.0
+            }
+            if (piece.type == PieceType.QUEEN) {
+                bonus -= 14.0
+            }
+            if (piece.type == PieceType.PAWN && (move.to.col == 3 || move.to.col == 4)) {
+                bonus += 10.0
+            }
+        }
+
+        // Check bonus
+        if (after.isInCheck(after.turn)) bonus += 10.0
+
+        // Penalize leaving piece attacked & undefended
+        if (after.isSquareAttacked(move.to, after.turn) && !after.isSquareAttacked(move.to, state.turn)) {
+            bonus -= (piece.type.valueCp / 18.0).coerceAtMost(35.0)
+        }
+
+        // Proximity to enemy king with heavy/minor pieces
+        if (piece.type != PieceType.PAWN && piece.type != PieceType.KING) {
+            after.findKing(after.turn)?.let { ek ->
+                val dist = abs(move.to.row - ek.row) + abs(move.to.col - ek.col)
+                if (dist <= 3) bonus += (4 - dist) * 4.5
+            }
+        }
+
+        // Avoid creating isolated pawns on capture/push
+        if (piece.type == PieceType.PAWN) {
+            val col = move.to.col
+            val hasFriendlyNeighbor = ((col - 1).coerceAtLeast(0)..(col + 1).coerceAtMost(7))
+                .filter { it != col }
+                .any { adjCol ->
+                    (0..7).any { r ->
+                        val p = after.pieceAt(r, adjCol)
+                        p?.color == state.turn && p.type == PieceType.PAWN
+                    }
+                }
+            if (!hasFriendlyNeighbor) bonus -= 8.0
+        }
+
+        return bonus
+    }
+
+    private fun computePersonalityFeatureScore(
+        stateBefore: ChessBoardState,
+        afterState: ChessBoardState,
+        move: ChessMove,
+        givesCheck: Boolean,
+        personality: EnginePersonality,
+        evalSideBeforeCp: Int,
+        gameSeed: Long,
+        lastMoveFromWing: Int?,
+        lastMovedPieceType: PieceType?
+    ): Double {
+        val piece = stateBefore.pieceAt(move.from) ?: return 0.0
+        val phase = stateBefore.detectPhase()
+        val earlyMove = stateBefore.fullMoveNumber <= 10
+        val oppKing = afterState.findKing(afterState.turn)
+        val kingDistAfter = oppKing?.let { abs(move.to.row - it.row) + abs(move.to.col - it.col) } ?: 6
+        val kingDistBefore = oppKing?.let { abs(move.from.row - it.row) + abs(move.from.col - it.col) } ?: 6
+        val approachingKing = kingDistAfter < kingDistBefore
+        val oppMobility = afterState.generateLegalMoves().size
+        val repetition = (afterState.positionHistory[afterState.positionKey()] ?: 0) >= 2
+        val isHangingSacrifice = afterState.isSquareAttacked(move.to, afterState.turn) &&
+            !afterState.isSquareAttacked(move.to, stateBefore.turn) &&
+            move.capturedPiece == null
+
+        return when (personality) {
+            EnginePersonality.CLASSIC -> 0.0
+            EnginePersonality.FIERCE_WARRIOR -> {
+                var f = 0.0
+                if (givesCheck) f += 18.0
+                if (approachingKing) f += 12.0
+                if (earlyMove && piece.type == PieceType.PAWN && (move.to.col >= 5 || move.to.col <= 2)) f += 10.0
+                if (move.capturedPiece != null && givesCheck) f += 12.0
+                f
+            }
+            EnginePersonality.IRON_FORTRESS -> {
+                var f = 0.0
+                if (move.isCastleKingside || move.isCastleQueenside) f += 26.0
+                if (afterState.isSquareAttacked(move.to, stateBefore.turn)) f += 9.0
+                if (move.capturedPiece != null) f += 8.0
+                if (isHangingSacrifice) f -= 20.0
+                f
+            }
+            EnginePersonality.STRATEGIC_GENIUS -> {
+                var f = 0.0
+                if (move.to.row in 2..5 && move.to.col in 2..5) f += 14.0
+                if (piece.type == PieceType.KNIGHT || piece.type == PieceType.BISHOP) f += 8.0
+                if (afterState.isSquareAttacked(move.to, stateBefore.turn)) f += 8.0
+                f
+            }
+            EnginePersonality.PATIENT_SERPENT -> {
+                var f = 0.0
+                f += (32 - oppMobility).coerceIn(-8, 18) * 0.8
+                if (move.to.row in 2..5 && move.to.col in 2..5) f += 10.0
+                if (move.capturedPiece != null && earlyMove) f -= 8.0
+                if (givesCheck && earlyMove) f -= 7.0
+                if (repetition) f -= 14.0
+                f
+            }
+            EnginePersonality.ENDGAME_MASTER -> {
+                var f = 0.0
+                if (phase == GamePhase.ENDGAME || piece.type == PieceType.PAWN) f += 12.0
+                if (piece.type == PieceType.KING && phase == GamePhase.ENDGAME && move.to.row in 2..5 && move.to.col in 2..5) f += 18.0
+                if (evalSideBeforeCp >= 80 && move.capturedPiece != null) f += 15.0
+                if (afterState.isSquareAttacked(move.to, stateBefore.turn)) f += 6.0
+                f
+            }
+            EnginePersonality.SACRIFICE_KING -> {
+                var f = 0.0
+                if (isHangingSacrifice || (move.capturedPiece == null && approachingKing)) f += 16.0
+                if (givesCheck) f += 16.0
+                if (oppKing != null && kingDistAfter <= 2) f += 14.0
+                f
+            }
+            EnginePersonality.BRILLIANCY_CREATOR -> {
+                var f = 0.0
+                // Quiet creative moves and calculated attacks without pointless blunders
+                if (move.capturedPiece == null && !givesCheck && move.to.row in 1..6 && move.to.col in 1..6) f += 11.0
+                if (approachingKing) f += 10.0
+                if (isHangingSacrifice && !afterState.isInCheck(afterState.turn)) f -= 12.0
+                f
+            }
+            EnginePersonality.MISTAKE_CATCHER -> {
+                var f = 0.0
+                f += (34 - oppMobility).coerceIn(-6, 16) * 0.9
+                if (move.capturedPiece != null) f += 10.0
+                if (givesCheck) f += 10.0
+                f
+            }
+            EnginePersonality.TRICKY_GENIUS -> {
+                var f = 0.0
+                if (move.capturedPiece == null && !givesCheck) f += 9.0
+                // Bait / counter-trap potential when opponent has few safe replies
+                f += (30 - oppMobility).coerceIn(-5, 15) * 0.85
+                if (approachingKing) f += 9.0
+                f
+            }
+            EnginePersonality.OPPORTUNITY_HUNTER -> {
+                var f = 0.0
+                if (move.capturedPiece != null) f += 14.0
+                if (move.promotion != null) f += 16.0
+                if (givesCheck) f += 12.0
+                f
+            }
+            EnginePersonality.LONG_GAME_MAKER -> {
+                var f = 0.0
+                if (evalSideBeforeCp >= 100) {
+                    if (move.capturedPiece != null) f -= 14.0
+                    if (givesCheck) f -= 12.0
+                    if (repetition) f -= 18.0
+                    f += 8.0
+                } else {
+                    if (move.to.row in 2..5 && move.to.col in 2..5) f += 9.0
+                    if (afterState.isSquareAttacked(move.to, stateBefore.turn)) f += 8.0
+                }
+                f
+            }
+            EnginePersonality.MYSTERY_PLAYER -> {
+                var f = 0.0
+                val wing = when {
+                    move.to.col <= 2 -> 0
+                    move.to.col >= 5 -> 2
+                    else -> 1
+                }
+                if (lastMoveFromWing != null && wing == lastMoveFromWing) f -= 9.0 else f += 6.0
+                if (lastMovedPieceType != null && piece.type == lastMovedPieceType) f -= 7.0 else f += 5.0
+                val hashSeed = gameSeed xor (stateBefore.fullMoveNumber.toLong() * 31L) xor move.toUci().hashCode().toLong()
+                val jitter = (Random(hashSeed).nextDouble() - 0.5) * 18.0
+                f + jitter
+            }
+        }
+    }
+
+    private fun <T> softmaxSample(items: List<T>, temperature: Double, scoreFn: (T) -> Double): T {
+        if (items.size <= 1) return items.first()
+        val scores = items.map(scoreFn)
+        val maxS = scores.maxOrNull() ?: 0.0
+        val safeTemp = temperature.coerceAtLeast(1.0)
+        val weights = scores.map { s -> exp(((s - maxS) / safeTemp).coerceIn(-30.0, 0.0)) }
+        val sum = weights.sum()
+        if (sum <= 0.0) return items.first()
+        var r = ThreadLocalRandom.current().nextDouble() * sum
+        for (i in items.indices) {
+            r -= weights[i]
+            if (r <= 0.0) return items[i]
+        }
+        return items.last()
+    }
+
+    /**
+     * Short mate detector (mate in <= [maxMoves] full moves) for Opportunity Hunter.
+     */
+    fun findShortMateMove(
+        state: ChessBoardState,
+        maxMoves: Int = 3,
+        maxTimeMs: Long = 150L,
+        maxNodes: Int = 65_000
+    ): ChessMove? {
+        val legal = state.generateLegalMoves()
+        if (legal.isEmpty()) return null
+        val ctx = SearchContext(System.currentTimeMillis(), maxTimeMs, 1.0f, maxNodes = maxNodes)
+        val targetDepth = (maxMoves * 2 - 1).coerceIn(1, 5)
+        for (move in legal) {
+            val next = state.copyWithMoveFast(move)
+            if (next.generateLegalMoves().isEmpty() && next.isInCheck(next.turn)) {
+                return move
+            }
+        }
+        if (targetDepth <= 1) return null
+        val scored = scoreRootMoves(state, legal, min(targetDepth, 3), ctx)
+        val top = scored.firstOrNull() ?: return null
+        return if (top.second >= MATE_SCORE - targetDepth - 2) top.first else null
+    }
+
+    /**
+     * MultiPV Position Analysis (Ruqaa Section 8.1: up to [multiPv] = 3 lines).
+     */
+    fun evaluateMultiPv(
+        state: ChessBoardState,
+        multiPv: Int = 3,
+        timeLimitMs: Long = 1700L,
+        maxDepth: Int = 5
+    ): List<MultiPvLine> {
+        val legalMoves = state.generateLegalMoves()
+        if (legalMoves.isEmpty()) return emptyList()
+
+        val ctx = SearchContext(System.currentTimeMillis(), timeLimitMs, 1.0f)
+        var latestScored = scoreRootMoves(state, legalMoves, 1, ctx)
+        var reachedDepth = 1
+        for (d in 2..maxDepth) {
+            val res = scoreRootMoves(state, legalMoves, d, ctx)
+            if (ctx.timedOut && res.isEmpty()) break
+            if (res.isNotEmpty()) {
+                latestScored = res
+                reachedDepth = d
+            }
+            if (ctx.timedOut) break
+        }
+
+        return latestScored.take(multiPv).mapIndexed { idx, (move, scoreSide) ->
+            val evalWhite = if (state.turn == PieceColor.WHITE) scoreSide else -scoreSide
+            val mateIn: Int? = if (abs(scoreSide) >= MATE_SCORE - 500) {
+                val plies = (MATE_SCORE - abs(scoreSide)).coerceAtLeast(1)
+                val full = (plies + 1) / 2
+                if (evalWhite >= 0) full else -full
+            } else null
+
+            val san = state.toSan(move, legalMoves)
+            val pvUci = extractPvLine(state, move, ctx.tt, maxPlies = 6)
+            val pvSan = convertPvUciToSan(state, pvUci)
+
+            MultiPvLine(
+                rank = idx + 1,
+                move = move,
+                san = san,
+                evalWhiteCp = evalWhite,
+                mateIn = mateIn,
+                depth = reachedDepth,
+                pvSan = pvSan,
+                pvUci = pvUci,
+                nodes = ctx.nodes.toLong()
+            )
+        }
+    }
+
+    fun convertPvUciToSan(startState: ChessBoardState, pvUci: List<String>): List<String> {
+        val sans = mutableListOf<String>()
+        var curr = startState
+        for (uci in pvUci) {
+            val legal = curr.generateLegalMoves()
+            val mv = legal.find { it.toUci().equals(uci, ignoreCase = true) } ?: break
+            sans.add(curr.toSan(mv, legal))
+            curr = curr.copyWithMoveFast(mv)
+        }
+        return sans
     }
 
     fun evaluatePositionBestMove(
@@ -402,6 +1018,10 @@ object ChessEngine {
         val legalMoves = state.generateLegalMoves()
         if (legalMoves.isEmpty()) {
             return SearchResult(null, evaluateWhitePerspective(state, 1.0f), 0, nodesSearched = 1)
+        }
+        if (legalMoves.size == 1) {
+            val m = legalMoves[0]
+            return SearchResult(m, evaluateWhitePerspective(state.copyWithMoveFast(m), 1.0f), 1, 1, listOf(m.toUci()))
         }
         val ctx = SearchContext(System.currentTimeMillis(), timeLimitMs, 1.0f)
         var bestMove = legalMoves[0]
@@ -500,7 +1120,7 @@ object ChessEngine {
         ctx.nodes++
         if (ctx.checkTime()) return 0
 
-        if (state.halfMoveClock >= 100 || state.hasInsufficientMaterial()) return 0
+        if (state.halfMoveClock >= 150 || state.hasInsufficientMaterial()) return 0
 
         val hash = computeZobristHash(state)
         val ttIdx = ctx.tt.lookup(hash)
@@ -527,7 +1147,6 @@ object ChessEngine {
             return quiescence(state, alphaInit, beta, 0, ctx)
         }
 
-        // Null-Move Pruning (Stockfish-inspired forward pruning when non-pawn material exists)
         if (allowNull && !inCheck && depth >= 3 && hasNonPawnMaterial(state, state.turn)) {
             val nullState = state.copyWithNullMove()
             val reduction = if (depth >= 6) 3 else 2
@@ -551,7 +1170,6 @@ object ChessEngine {
             val score: Int = if (index == 0) {
                 -negamax(next, depth - 1 + ext, -beta, -alpha, ply + 1, allowNull = true, ctx = ctx)
             } else {
-                // Late Move Reductions (LMR) for quiet late moves
                 val lmrReduction = if (depth >= 3 && index >= 4 && !isTactical) {
                     if (index >= 10 && depth >= 5) 2 else 1
                 } else 0
@@ -650,19 +1268,13 @@ object ChessEngine {
         return moves.sortedByDescending { move ->
             val packed = ctx.tt.packMove(move)
             var score = 0
-            if (ttPackedMove != 0 && packed == ttPackedMove) {
-                score += 100_000
-            }
+            if (ttPackedMove != 0 && packed == ttPackedMove) score += 100_000
             if (move.capturedPiece != null) {
                 val attackerVal = state.pieceAt(move.from)?.type?.valueCp ?: 100
                 score += 20_000 + move.capturedPiece.type.valueCp * 10 - attackerVal
             }
-            if (move.promotion != null) {
-                score += 18_000 + move.promotion.valueCp
-            }
-            if (move.isCastleKingside || move.isCastleQueenside) {
-                score += 650
-            }
+            if (move.promotion != null) score += 18_000 + move.promotion.valueCp
+            if (move.isCastleKingside || move.isCastleQueenside) score += 650
             if (move == k0) score += 6_000
             else if (move == k1) score += 4_500
             else score += ctx.history[colorIdx][move.from.index][move.to.index]
@@ -743,11 +1355,11 @@ object ChessEngine {
         var egBlack = 0
         var whiteBishops = 0
         var blackBishops = 0
-        var phase = 0 // 0 = endgame, 24 = full opening/middlegame
+        var phase = 0
 
         val whitePawnFiles = IntArray(8)
         val blackPawnFiles = IntArray(8)
-        val whitePawnRanks = IntArray(8) { 7 } // closest-to-promotion rank per file (smaller = further up)
+        val whitePawnRanks = IntArray(8) { 7 }
         val blackPawnRanks = IntArray(8) { 0 }
 
         for (idx in 0..63) {
@@ -810,11 +1422,9 @@ object ChessEngine {
             }
         }
 
-        // Bishop pair synergy
         if (whiteBishops >= 2) { mgWhite += 35; egWhite += 45 }
         if (blackBishops >= 2) { mgBlack += 35; egBlack += 45 }
 
-        // Pawn structure, passed pawns & rook open/semi-open file evaluation
         for (c in 0..7) {
             if (whitePawnFiles[c] > 1) {
                 val pen = (whitePawnFiles[c] - 1) * 14
@@ -835,9 +1445,8 @@ object ChessEngine {
                 (c == 7 || blackPawnFiles[c + 1] == 0)
             if (bIso) { mgBlack -= 12; egBlack -= 16 }
 
-            // Passed pawn detection
             if (whitePawnFiles[c] > 0) {
-                val wRank = whitePawnRanks[c] // 1..6 (closer to 0 = closer to promotion)
+                val wRank = whitePawnRanks[c]
                 val blockedByBlack = ((c - 1).coerceAtLeast(0)..(c + 1).coerceAtMost(7)).any { f ->
                     blackPawnFiles[f] > 0 && blackPawnRanks[f] < wRank
                 }
@@ -848,7 +1457,7 @@ object ChessEngine {
                 }
             }
             if (blackPawnFiles[c] > 0) {
-                val bRank = blackPawnRanks[c] // 1..6 (closer to 7 = closer to promotion)
+                val bRank = blackPawnRanks[c]
                 val blockedByWhite = ((c - 1).coerceAtLeast(0)..(c + 1).coerceAtMost(7)).any { f ->
                     whitePawnFiles[f] > 0 && whitePawnRanks[f] > bRank
                 }
@@ -860,7 +1469,6 @@ object ChessEngine {
             }
         }
 
-        // Rook open / semi-open files bonus
         for (idx in 0..63) {
             val p = state.board[idx] ?: continue
             if (p.type != PieceType.ROOK) continue
@@ -878,7 +1486,6 @@ object ChessEngine {
             }
         }
 
-        // Aggression check tension
         if (aggression > 1.05f && state.isInCheck(state.turn)) {
             val penalty = (18 * aggression).toInt()
             if (state.turn == PieceColor.WHITE) mgWhite -= penalty else mgBlack -= penalty
@@ -902,7 +1509,7 @@ object ChessEngine {
                 BotPersona.CAPABLANCA, BotPersona.CARLSEN -> listOf("d2d4", "e2e4", "c2c4")
                 else -> listOf("e2e4", "d2d4", "g1f3")
             }
-            val uci = openings[Random.nextInt(openings.size)]
+            val uci = openings[ThreadLocalRandom.current().nextInt(openings.size)]
             return legalMoves.find { it.toUci() == uci }
         }
         if (state.fullMoveNumber == 1 && state.turn == PieceColor.BLACK) {
@@ -918,7 +1525,7 @@ object ChessEngine {
                 d4Pawn?.color == PieceColor.WHITE -> listOf("d7d5", "g8f6")
                 else -> listOf("e7e5", "d7d5", "g8f6")
             }
-            val uci = candidates[Random.nextInt(candidates.size)]
+            val uci = candidates[ThreadLocalRandom.current().nextInt(candidates.size)]
             return legalMoves.find { it.toUci() == uci }
         }
         return null

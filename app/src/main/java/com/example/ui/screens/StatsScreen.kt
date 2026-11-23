@@ -17,6 +17,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.BarChart
 import androidx.compose.material.icons.rounded.EmojiEvents
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Lock
@@ -24,9 +25,11 @@ import androidx.compose.material.icons.rounded.Psychology
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -34,23 +37,25 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.example.chess.BotPersona
 import com.example.chess.GameResult
 import com.example.data.AchievementCatalog
 import com.example.data.AchievementEntity
 import com.example.data.PeriodicReport
 import com.example.data.RatingPointEntity
 import com.example.data.ReportPeriod
+import com.example.data.RuqaaEngineStatsSummary
 import com.example.data.SavedGameEntity
 import com.example.data.UserPreferences
+import com.example.data.WdlRecord
 import com.example.data.formatOpponentTitle
 import com.example.ui.components.AccuracyTrendBars
 import com.example.ui.components.EloProgressionChart
 import com.example.ui.components.PhaseGaugeRow
-import com.example.ui.theme.MonoFontFamily
+import com.example.ui.theme.formatArabicNumber
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -63,25 +68,28 @@ fun StatsScreen(
     ratingHistory: List<RatingPointEntity>,
     completedGames: List<SavedGameEntity>,
     achievements: List<AchievementEntity>,
+    unassistedOnly: Boolean,
+    engineStatsSummary: RuqaaEngineStatsSummary,
     onSelectPeriod: (ReportPeriod) -> Unit,
+    onToggleUnassistedOnly: (Boolean) -> Unit,
     onReviewSavedGame: (SavedGameEntity) -> Unit
 ) {
     val unlockedIds = remember(achievements) { achievements.map { it.id }.toSet() }
-    val dateFormat = remember { SimpleDateFormat("dd MMM • HH:mm", Locale("ar")) }
+    val dateFormat = remember { SimpleDateFormat("dd MMM • HH:mm", Locale.forLanguageTag("ar-IQ")) }
 
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
                 .widthIn(max = 680.dp),
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 104.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             item {
                 Column {
-                    Text("التقارير الإحصائية والتشخيص", style = MaterialTheme.typography.headlineSmall)
+                    Text("إحصاءاتك وتقاريرك", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.ExtraBold)
                     Text(
-                        text = "تحليل مستمر لمسار تطورك ونقاط القوة والضعف",
+                        text = "نتائج مباريات المحرك المنتهية وتشخيص نقاط القوة والضعف",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -108,10 +116,93 @@ fun StatsScreen(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    StatKpiCard("التصنيف", "${prefs.playerElo}", MaterialTheme.colorScheme.primary, Modifier.weight(1f))
-                    StatKpiCard("المباريات", "${periodicReport.totalGames}", MaterialTheme.colorScheme.tertiary, Modifier.weight(1f))
-                    StatKpiCard("نسبة الفوز", "$winRate%", MaterialTheme.colorScheme.secondary, Modifier.weight(1f))
-                    StatKpiCard("متوسط الدقة", "${periodicReport.avgAccuracy}%", MaterialTheme.colorScheme.primary, Modifier.weight(1f))
+                    StatKpiCard("التصنيف", formatArabicNumber(prefs.playerElo), MaterialTheme.colorScheme.primary, Modifier.weight(1f))
+                    StatKpiCard("المباريات", formatArabicNumber(periodicReport.totalGames), MaterialTheme.colorScheme.tertiary, Modifier.weight(1f))
+                    StatKpiCard("نسبة الفوز", "${formatArabicNumber(winRate)}٪", MaterialTheme.colorScheme.secondary, Modifier.weight(1f))
+                    StatKpiCard("متوسط الدقة", "${formatArabicNumber(periodicReport.avgAccuracy)}٪", MaterialTheme.colorScheme.primary, Modifier.weight(1f))
+                }
+            }
+
+            // Ruqaa Section 10.3 Engine Stats Filter & W-D-L Breakdown
+            item {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+                ) {
+                    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Rounded.BarChart, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                Column {
+                                    Text("دون مساعدة مسجّلة", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                                    Text(
+                                        text = "يستبعد التلميحات والوضعيات المعدّلة والقوة المتغيّرة",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                            Switch(
+                                checked = unassistedOnly,
+                                onCheckedChange = onToggleUnassistedOnly,
+                                modifier = Modifier.testTag("unassisted_filter_switch")
+                            )
+                        }
+
+                        // Metadata counts pills
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            CountPill(
+                                label = "مع مساعدة",
+                                count = engineStatsSummary.assistedCount,
+                                modifier = Modifier.weight(1f)
+                            )
+                            CountPill(
+                                label = "وضعيات مخصّصة",
+                                count = engineStatsSummary.customPositionCount,
+                                modifier = Modifier.weight(1f)
+                            )
+                            CountPill(
+                                label = "قوة متغيّرة",
+                                count = engineStatsSummary.strengthMixedCount,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+
+                        if (engineStatsSummary.byStrength.isNotEmpty()) {
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
+                            Text("حسب القوة", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                            engineStatsSummary.byStrength.forEach { (strengthLabel, rec) ->
+                                WdlRow(title = strengthLabel, rec = rec)
+                            }
+                        }
+
+                        if (engineStatsSummary.byPersonality.isNotEmpty()) {
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
+                            Text("حسب شخصية الخصم", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                            engineStatsSummary.byPersonality.forEach { (personalityLabel, rec) ->
+                                WdlRow(title = personalityLabel, rec = rec)
+                            }
+                        }
+
+                        if (engineStatsSummary.byStrength.isEmpty()) {
+                            Text(
+                                text = "لا توجد مباريات محرك منتهية تطابق هذا المرشّح بعد.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
                 }
             }
 
@@ -190,7 +281,7 @@ fun StatsScreen(
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     Icon(Icons.Rounded.EmojiEvents, contentDescription = null, tint = MaterialTheme.colorScheme.secondary)
                     Text(
-                        text = "الجوائز والأوسمة (${unlockedIds.size}/${AchievementCatalog.all.size})",
+                        text = "الجوائز والأوسمة (${formatArabicNumber(unlockedIds.size)}/${formatArabicNumber(AchievementCatalog.all.size)})",
                         style = MaterialTheme.typography.titleMedium
                     )
                 }
@@ -244,8 +335,7 @@ fun StatsScreen(
                                         )
                                     }
                                     Text(
-                                        text = "+${ach.xpBonus} XP",
-                                        fontFamily = MonoFontFamily,
+                                        text = "+${formatArabicNumber(ach.xpBonus)} XP",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.primary
                                     )
@@ -327,16 +417,14 @@ fun StatsScreen(
                             }
                             Column(horizontalAlignment = Alignment.End) {
                                 Text(
-                                    text = "دقة ${game.playerAccuracy}%",
-                                    fontFamily = MonoFontFamily,
+                                    text = "دقة ${formatArabicNumber(game.playerAccuracy)}٪",
                                     fontWeight = FontWeight.Bold,
                                     color = MaterialTheme.colorScheme.primary,
                                     style = MaterialTheme.typography.labelLarge
                                 )
-                                val deltaText = if (game.eloDelta >= 0) "+${game.eloDelta}" else "${game.eloDelta}"
+                                val deltaText = if (game.eloDelta >= 0) "+${formatArabicNumber(game.eloDelta)}" else formatArabicNumber(game.eloDelta)
                                 Text(
                                     text = "$deltaText ELO",
-                                    fontFamily = MonoFontFamily,
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -346,6 +434,58 @@ fun StatsScreen(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun CountPill(label: String, count: Int, modifier: Modifier = Modifier) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(10.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+    ) {
+        Column(
+            modifier = Modifier.padding(vertical = 7.dp, horizontal = 6.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = formatArabicNumber(count),
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary
+            )
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
+private fun WdlRow(title: String, rec: WdlRecord) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.weight(1f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Text(
+            text = "فوز ${formatArabicNumber(rec.wins)} • تعادل ${formatArabicNumber(rec.draws)} • خسارة ${formatArabicNumber(rec.losses)}",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.primary,
+            fontWeight = FontWeight.Bold
+        )
     }
 }
 
@@ -369,7 +509,6 @@ private fun StatKpiCard(
         ) {
             Text(
                 text = value,
-                fontFamily = MonoFontFamily,
                 fontWeight = FontWeight.Bold,
                 color = accent,
                 style = MaterialTheme.typography.titleMedium

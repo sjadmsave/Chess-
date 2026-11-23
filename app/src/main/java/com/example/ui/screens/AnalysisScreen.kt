@@ -21,6 +21,7 @@ import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.EditNote
 import androidx.compose.material.icons.rounded.Extension
 import androidx.compose.material.icons.rounded.History
+import androidx.compose.material.icons.rounded.Psychology
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -34,6 +35,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.example.ui.theme.formatArabicNumber
 import com.example.viewmodel.ActiveMatchUiState
 
 @Composable
@@ -41,6 +43,7 @@ fun AnalysisScreen(
     matchState: ActiveMatchUiState,
     onOpenFenSetup: () -> Unit,
     onAnalyzeCurrentMatch: () -> Unit,
+    onAnalyzeMultiPvPosition: () -> Unit,
     onOpenImportDialog: () -> Unit,
     onOpenPuzzles: () -> Unit,
     onOpenSavedArchive: () -> Unit
@@ -64,7 +67,7 @@ fun AnalysisScreen(
                         color = MaterialTheme.colorScheme.onBackground
                     )
                     Text(
-                        text = "راجع النقلات على الرقعة واستعن بالمحرك",
+                        text = "راجع النقلات على الرقعة واستعن بمحرك Stockfish",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -74,7 +77,7 @@ fun AnalysisScreen(
             item {
                 AnalysisHubCard(
                     title = "اللعب من FEN",
-                    subtitle = "ابدأ مباراة من وضعية تختارها",
+                    subtitle = "ابدأ مباراة أو عدّل وضعية تختارها",
                     icon = Icons.Rounded.EditNote,
                     tag = "analysis_fen_card",
                     onClick = onOpenFenSetup
@@ -84,7 +87,11 @@ fun AnalysisScreen(
             item {
                 AnalysisHubCard(
                     title = "تحليل المباراة الحالية",
-                    subtitle = if (moveCount == 0) "لا توجد نقلات بعد • ابدأ اللعب أو الاستعراض" else "$moveCount نقلة",
+                    subtitle = if (moveCount == 0) {
+                        "لا توجد نقلات بعد • ابدأ اللعب أو الاستعراض"
+                    } else {
+                        "${formatArabicNumber(moveCount)} نقلة • مراجعة قابلة للإيقاف والاستئناف"
+                    },
                     icon = Icons.Rounded.AutoGraph,
                     tag = "analysis_current_match_card",
                     onClick = onAnalyzeCurrentMatch
@@ -93,8 +100,18 @@ fun AnalysisScreen(
 
             item {
                 AnalysisHubCard(
+                    title = "تحليل الوضعية (أفضل ٣ خطوط)",
+                    subtitle = "بحث MultiPV ٣ بعمق كامل لزمن ١٫٧ ثانية على الرقعة",
+                    icon = Icons.Rounded.Psychology,
+                    tag = "analysis_multipv_card",
+                    onClick = onAnalyzeMultiPvPosition
+                )
+            }
+
+            item {
+                AnalysisHubCard(
                     title = "استيراد PGN أو FEN",
-                    subtitle = "افتح ملفاً أو ألصق وضعية",
+                    subtitle = "افتح ملفاً أو ألصق وضعية أو مباراة",
                     icon = Icons.Rounded.Download,
                     tag = "analysis_import_card",
                     onClick = onOpenImportDialog

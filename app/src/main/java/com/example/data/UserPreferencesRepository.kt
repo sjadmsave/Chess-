@@ -15,40 +15,61 @@ import com.example.chess.EngineBackendPreference
 import com.example.chess.EnginePersonality
 import com.example.chess.FloatingBubbleSize
 import com.example.chess.FloatingFrameShape
+import com.example.chess.PersonalityRisk
 import com.example.chess.PieceStyle
+import com.example.chess.SoundProfile
+import com.example.chess.StrengthTier
+import com.example.chess.VibrationStyle
 import com.example.ui.theme.AppThemeMode
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
-private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "elite_chess_prefs")
+private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "ruqaa_chess_prefs")
 
+/**
+ * Default values match Ruqaa Specification Section 13:
+ * - light = false (AppThemeMode.DARK)
+ * - sound = false, vibrate = false, sound_profile = soft, sound_volume = 55, vibration_style = 0
+ * - auto_review = true, human_style = true, auto_overlay = true
+ * - piece_set = CLASSIC, board_texture = FLAT, mark_rings = false, mark_legal_visible = true, mark_last_visible = true
+ * - overlay_x = 12, overlay_y = 72, overlay_width = 270, overlay_opacity = 100
+ * - engine_elo = -1 (uses EASY preset = 700), personality = CLASSIC, intensity = 50, risk = BALANCED
+ */
 data class UserPreferences(
-    val themeMode: AppThemeMode = AppThemeMode.LIGHT,
+    val themeMode: AppThemeMode = AppThemeMode.DARK,
     val boardTheme: BoardTheme = BoardTheme.TOURNAMENT_EMERALD,
     val boardMaterial: BoardMaterial = BoardMaterial.FLAT,
     val pieceStyle: PieceStyle = PieceStyle.CLASSIC_STAUNTON,
-    val soundEnabled: Boolean = true,
-    val hapticsEnabled: Boolean = true,
+    val soundEnabled: Boolean = false,
+    val soundProfile: SoundProfile = SoundProfile.SOFT,
+    val soundVolume: Int = 55,
+    val hapticsEnabled: Boolean = false,
+    val vibrationStyle: VibrationStyle = VibrationStyle.LIGHT,
     val showEvalBar: Boolean = true,
     val showLastMove: Boolean = true,
     val showLegalMoves: Boolean = true,
-    val useRingsInsteadOfDots: Boolean = true,
-    val selectedColorHex: Long = 0xAA0D9488L,
-    val lastMoveColorHex: Long = 0x77769656L,
-    val legalMoveColorHex: Long = 0xCC0D9488L,
+    val useRingsInsteadOfDots: Boolean = false,
+    val selectedColorHex: Long = 0xAA006A87L,
+    val lastMoveColorHex: Long = 0x7772D9EFL,
+    val legalMoveColorHex: Long = 0xCC72D9EFL,
     val adaptiveMode: Boolean = false,
-    val customEngineElo: Int = 1800,
+    val strengthPreset: StrengthTier = StrengthTier.EASY,
+    val customEngineElo: Int = -1, // -1 means use strengthPreset
     val humanStyleEnabled: Boolean = true,
-    val enginePersonality: EnginePersonality = EnginePersonality.OPPORTUNITY_HUNTER,
+    val enginePersonality: EnginePersonality = EnginePersonality.CLASSIC,
+    val personalityIntensity: Int = 50,
+    val personalityRisk: PersonalityRisk = PersonalityRisk.BALANCED,
     val engineBackendPreference: EngineBackendPreference = EngineBackendPreference.STOCKFISH_AUTO,
     val stockfishMoveTimeMs: Int = 900,
     val stockfishThreads: Int = 2,
     val autoReviewAfterGame: Boolean = true,
-    val floatingAutoShow: Boolean = false,
-    val floatingWidthDp: Int = 220,
-    val floatingFrameShape: FloatingFrameShape = FloatingFrameShape.COMPACT,
-    val floatingOpacityPercent: Int = 85,
-    val floatingBubbleSize: FloatingBubbleSize = FloatingBubbleSize.SMALL,
+    val floatingAutoShow: Boolean = true,
+    val floatingWidthDp: Int = 270,
+    val floatingFrameShape: FloatingFrameShape = FloatingFrameShape.ROUNDED,
+    val floatingOpacityPercent: Int = 100,
+    val floatingBubbleSize: FloatingBubbleSize = FloatingBubbleSize.MEDIUM,
+    val floatingX: Int = 12,
+    val floatingY: Int = 72,
     val playerElo: Int = 1000,
     val xpPoints: Int = 0,
     val dailyStreak: Int = 0,
@@ -57,7 +78,13 @@ data class UserPreferences(
     val reminderHour: Int = 19,
     val reminderMinute: Int = 0,
     val selectedBotId: String = "fischer"
-)
+) {
+    val effectiveEngineElo: Int
+        get() = if (customEngineElo == -1) strengthPreset.targetElo else customEngineElo
+
+    val effectiveStrengthTier: StrengthTier
+        get() = if (customEngineElo == -1) strengthPreset else StrengthTier.fromElo(customEngineElo)
+}
 
 class UserPreferencesRepository(private val context: Context) {
 
@@ -66,28 +93,36 @@ class UserPreferencesRepository(private val context: Context) {
         val BOARD_THEME = stringPreferencesKey("board_theme")
         val BOARD_MATERIAL = stringPreferencesKey("board_material")
         val PIECE_STYLE = stringPreferencesKey("piece_style")
-        val SOUND_ENABLED = booleanPreferencesKey("sound_enabled")
-        val HAPTICS_ENABLED = booleanPreferencesKey("haptics_enabled")
+        val SOUND_ENABLED = booleanPreferencesKey("sound")
+        val SOUND_PROFILE = stringPreferencesKey("sound_profile")
+        val SOUND_VOLUME = intPreferencesKey("sound_volume")
+        val HAPTICS_ENABLED = booleanPreferencesKey("vibrate")
+        val VIBRATION_STYLE = intPreferencesKey("vibration_style")
         val SHOW_EVAL_BAR = booleanPreferencesKey("show_eval_bar")
-        val SHOW_LAST_MOVE = booleanPreferencesKey("show_last_move")
-        val SHOW_LEGAL_MOVES = booleanPreferencesKey("show_legal_moves")
-        val USE_RINGS = booleanPreferencesKey("use_rings_instead_of_dots")
+        val SHOW_LAST_MOVE = booleanPreferencesKey("mark_last_visible")
+        val SHOW_LEGAL_MOVES = booleanPreferencesKey("mark_legal_visible")
+        val USE_RINGS = booleanPreferencesKey("mark_rings")
         val SELECTED_COLOR_HEX = longPreferencesKey("selected_color_hex")
         val LAST_MOVE_COLOR_HEX = longPreferencesKey("last_move_color_hex")
         val LEGAL_MOVE_COLOR_HEX = longPreferencesKey("legal_move_color_hex")
         val ADAPTIVE_MODE = booleanPreferencesKey("adaptive_mode")
-        val CUSTOM_ENGINE_ELO = intPreferencesKey("custom_engine_elo")
-        val HUMAN_STYLE = booleanPreferencesKey("human_style_enabled")
-        val ENGINE_PERSONALITY = stringPreferencesKey("engine_personality")
+        val STRENGTH_PRESET = stringPreferencesKey("strength_preset")
+        val CUSTOM_ENGINE_ELO = intPreferencesKey("engine_elo")
+        val HUMAN_STYLE = booleanPreferencesKey("human_style")
+        val ENGINE_PERSONALITY = stringPreferencesKey("personality")
+        val PERSONALITY_INTENSITY = intPreferencesKey("personality_intensity")
+        val PERSONALITY_RISK = stringPreferencesKey("personality_risk")
         val ENGINE_BACKEND = stringPreferencesKey("engine_backend_preference")
         val STOCKFISH_MOVETIME_MS = intPreferencesKey("stockfish_movetime_ms")
         val STOCKFISH_THREADS = intPreferencesKey("stockfish_threads")
-        val AUTO_REVIEW = booleanPreferencesKey("auto_review_after_game")
-        val FLOATING_AUTO_SHOW = booleanPreferencesKey("floating_auto_show")
-        val FLOATING_WIDTH_DP = intPreferencesKey("floating_width_dp")
+        val AUTO_REVIEW = booleanPreferencesKey("auto_review")
+        val FLOATING_AUTO_SHOW = booleanPreferencesKey("auto_overlay")
+        val FLOATING_WIDTH_DP = intPreferencesKey("overlay_width")
         val FLOATING_FRAME_SHAPE = stringPreferencesKey("floating_frame_shape")
-        val FLOATING_OPACITY = intPreferencesKey("floating_opacity_percent")
+        val FLOATING_OPACITY = intPreferencesKey("overlay_opacity")
         val FLOATING_BUBBLE_SIZE = stringPreferencesKey("floating_bubble_size")
+        val FLOATING_X = intPreferencesKey("overlay_x")
+        val FLOATING_Y = intPreferencesKey("overlay_y")
         val PLAYER_ELO = intPreferencesKey("player_elo")
         val XP_POINTS = intPreferencesKey("xp_points")
         val DAILY_STREAK = intPreferencesKey("daily_streak")
@@ -101,33 +136,41 @@ class UserPreferencesRepository(private val context: Context) {
     val preferencesFlow: Flow<UserPreferences> = context.dataStore.data.map { p ->
         UserPreferences(
             themeMode = runCatching {
-                AppThemeMode.valueOf(p[Keys.THEME_MODE] ?: AppThemeMode.LIGHT.name)
-            }.getOrDefault(AppThemeMode.LIGHT),
+                AppThemeMode.valueOf(p[Keys.THEME_MODE] ?: AppThemeMode.DARK.name)
+            }.getOrDefault(AppThemeMode.DARK),
             boardTheme = BoardTheme.byId(p[Keys.BOARD_THEME] ?: BoardTheme.TOURNAMENT_EMERALD.id),
             boardMaterial = BoardMaterial.byId(p[Keys.BOARD_MATERIAL] ?: BoardMaterial.FLAT.id),
             pieceStyle = PieceStyle.byId(p[Keys.PIECE_STYLE] ?: PieceStyle.CLASSIC_STAUNTON.id),
-            soundEnabled = p[Keys.SOUND_ENABLED] ?: true,
-            hapticsEnabled = p[Keys.HAPTICS_ENABLED] ?: true,
+            soundEnabled = p[Keys.SOUND_ENABLED] ?: false,
+            soundProfile = SoundProfile.byId(p[Keys.SOUND_PROFILE] ?: SoundProfile.SOFT.id),
+            soundVolume = (p[Keys.SOUND_VOLUME] ?: 55).coerceIn(0, 100),
+            hapticsEnabled = p[Keys.HAPTICS_ENABLED] ?: false,
+            vibrationStyle = VibrationStyle.byLevel(p[Keys.VIBRATION_STYLE] ?: 0),
             showEvalBar = p[Keys.SHOW_EVAL_BAR] ?: true,
             showLastMove = p[Keys.SHOW_LAST_MOVE] ?: true,
             showLegalMoves = p[Keys.SHOW_LEGAL_MOVES] ?: true,
-            useRingsInsteadOfDots = p[Keys.USE_RINGS] ?: true,
-            selectedColorHex = p[Keys.SELECTED_COLOR_HEX] ?: 0xAA0D9488L,
-            lastMoveColorHex = p[Keys.LAST_MOVE_COLOR_HEX] ?: 0x77769656L,
-            legalMoveColorHex = p[Keys.LEGAL_MOVE_COLOR_HEX] ?: 0xCC0D9488L,
+            useRingsInsteadOfDots = p[Keys.USE_RINGS] ?: false,
+            selectedColorHex = p[Keys.SELECTED_COLOR_HEX] ?: 0xAA006A87L,
+            lastMoveColorHex = p[Keys.LAST_MOVE_COLOR_HEX] ?: 0x7772D9EFL,
+            legalMoveColorHex = p[Keys.LEGAL_MOVE_COLOR_HEX] ?: 0xCC72D9EFL,
             adaptiveMode = p[Keys.ADAPTIVE_MODE] ?: false,
-            customEngineElo = p[Keys.CUSTOM_ENGINE_ELO] ?: 1800,
+            strengthPreset = StrengthTier.byId(p[Keys.STRENGTH_PRESET] ?: StrengthTier.EASY.id),
+            customEngineElo = p[Keys.CUSTOM_ENGINE_ELO] ?: -1,
             humanStyleEnabled = p[Keys.HUMAN_STYLE] ?: true,
-            enginePersonality = EnginePersonality.byId(p[Keys.ENGINE_PERSONALITY] ?: EnginePersonality.OPPORTUNITY_HUNTER.id),
+            enginePersonality = EnginePersonality.byId(p[Keys.ENGINE_PERSONALITY] ?: EnginePersonality.CLASSIC.id),
+            personalityIntensity = (p[Keys.PERSONALITY_INTENSITY] ?: 50).coerceIn(0, 100),
+            personalityRisk = PersonalityRisk.byId(p[Keys.PERSONALITY_RISK] ?: PersonalityRisk.BALANCED.id),
             engineBackendPreference = EngineBackendPreference.byId(p[Keys.ENGINE_BACKEND] ?: EngineBackendPreference.STOCKFISH_AUTO.id),
             stockfishMoveTimeMs = p[Keys.STOCKFISH_MOVETIME_MS] ?: 900,
             stockfishThreads = p[Keys.STOCKFISH_THREADS] ?: 2,
             autoReviewAfterGame = p[Keys.AUTO_REVIEW] ?: true,
-            floatingAutoShow = p[Keys.FLOATING_AUTO_SHOW] ?: false,
-            floatingWidthDp = p[Keys.FLOATING_WIDTH_DP] ?: 220,
-            floatingFrameShape = FloatingFrameShape.byId(p[Keys.FLOATING_FRAME_SHAPE] ?: FloatingFrameShape.COMPACT.id),
-            floatingOpacityPercent = p[Keys.FLOATING_OPACITY] ?: 85,
-            floatingBubbleSize = FloatingBubbleSize.byId(p[Keys.FLOATING_BUBBLE_SIZE] ?: FloatingBubbleSize.SMALL.id),
+            floatingAutoShow = p[Keys.FLOATING_AUTO_SHOW] ?: true,
+            floatingWidthDp = (p[Keys.FLOATING_WIDTH_DP] ?: 270).coerceIn(180, 560),
+            floatingFrameShape = FloatingFrameShape.byId(p[Keys.FLOATING_FRAME_SHAPE] ?: FloatingFrameShape.ROUNDED.id),
+            floatingOpacityPercent = (p[Keys.FLOATING_OPACITY] ?: 100).coerceIn(65, 100),
+            floatingBubbleSize = FloatingBubbleSize.byId(p[Keys.FLOATING_BUBBLE_SIZE] ?: FloatingBubbleSize.MEDIUM.id),
+            floatingX = p[Keys.FLOATING_X] ?: 12,
+            floatingY = p[Keys.FLOATING_Y] ?: 72,
             playerElo = p[Keys.PLAYER_ELO] ?: 1000,
             xpPoints = p[Keys.XP_POINTS] ?: 0,
             dailyStreak = p[Keys.DAILY_STREAK] ?: 0,
@@ -177,8 +220,20 @@ class UserPreferencesRepository(private val context: Context) {
         context.dataStore.edit { it[Keys.SOUND_ENABLED] = enabled }
     }
 
+    suspend fun setSoundProfile(profile: SoundProfile) {
+        context.dataStore.edit { it[Keys.SOUND_PROFILE] = profile.id }
+    }
+
+    suspend fun setSoundVolume(volume: Int) {
+        context.dataStore.edit { it[Keys.SOUND_VOLUME] = volume.coerceIn(0, 100) }
+    }
+
     suspend fun setHapticsEnabled(enabled: Boolean) {
         context.dataStore.edit { it[Keys.HAPTICS_ENABLED] = enabled }
+    }
+
+    suspend fun setVibrationStyle(style: VibrationStyle) {
+        context.dataStore.edit { it[Keys.VIBRATION_STYLE] = style.level }
     }
 
     suspend fun setShowEvalBar(show: Boolean) {
@@ -189,8 +244,19 @@ class UserPreferencesRepository(private val context: Context) {
         context.dataStore.edit { it[Keys.ADAPTIVE_MODE] = enabled }
     }
 
+    suspend fun setStrengthTier(tier: StrengthTier) {
+        context.dataStore.edit {
+            it[Keys.STRENGTH_PRESET] = tier.id
+            it[Keys.CUSTOM_ENGINE_ELO] = -1
+        }
+    }
+
     suspend fun setCustomEngineElo(elo: Int) {
-        context.dataStore.edit { it[Keys.CUSTOM_ENGINE_ELO] = elo.coerceIn(200, 3000) }
+        val snapped = StrengthTier.snapElo(elo)
+        context.dataStore.edit {
+            it[Keys.CUSTOM_ENGINE_ELO] = snapped
+            it[Keys.STRENGTH_PRESET] = StrengthTier.fromElo(snapped).id
+        }
     }
 
     suspend fun setHumanStyleEnabled(enabled: Boolean) {
@@ -199,6 +265,14 @@ class UserPreferencesRepository(private val context: Context) {
 
     suspend fun setEnginePersonality(personality: EnginePersonality) {
         context.dataStore.edit { it[Keys.ENGINE_PERSONALITY] = personality.id }
+    }
+
+    suspend fun setPersonalityIntensity(intensity: Int) {
+        context.dataStore.edit { it[Keys.PERSONALITY_INTENSITY] = intensity.coerceIn(0, 100) }
+    }
+
+    suspend fun setPersonalityRisk(risk: PersonalityRisk) {
+        context.dataStore.edit { it[Keys.PERSONALITY_RISK] = risk.id }
     }
 
     suspend fun setEngineBackendPreference(backend: EngineBackendPreference) {
@@ -210,7 +284,7 @@ class UserPreferencesRepository(private val context: Context) {
     }
 
     suspend fun setStockfishThreads(threads: Int) {
-        context.dataStore.edit { it[Keys.STOCKFISH_THREADS] = threads.coerceIn(1, 4) }
+        context.dataStore.edit { it[Keys.STOCKFISH_THREADS] = threads.coerceIn(1, 2) }
     }
 
     suspend fun setAutoReviewAfterGame(enabled: Boolean) {
@@ -221,6 +295,13 @@ class UserPreferencesRepository(private val context: Context) {
         context.dataStore.edit { it[Keys.FLOATING_AUTO_SHOW] = enabled }
     }
 
+    suspend fun saveFloatingPosition(xDp: Int, yDp: Int) {
+        context.dataStore.edit {
+            it[Keys.FLOATING_X] = xDp
+            it[Keys.FLOATING_Y] = yDp
+        }
+    }
+
     suspend fun saveFloatingCustomization(
         widthDp: Int,
         frameShape: FloatingFrameShape,
@@ -228,9 +309,9 @@ class UserPreferencesRepository(private val context: Context) {
         bubbleSize: FloatingBubbleSize
     ) {
         context.dataStore.edit {
-            it[Keys.FLOATING_WIDTH_DP] = widthDp.coerceIn(160, 320)
+            it[Keys.FLOATING_WIDTH_DP] = widthDp.coerceIn(180, 560)
             it[Keys.FLOATING_FRAME_SHAPE] = frameShape.id
-            it[Keys.FLOATING_OPACITY] = opacityPercent.coerceIn(30, 100)
+            it[Keys.FLOATING_OPACITY] = opacityPercent.coerceIn(65, 100)
             it[Keys.FLOATING_BUBBLE_SIZE] = bubbleSize.id
         }
     }

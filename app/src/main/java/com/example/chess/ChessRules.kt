@@ -464,11 +464,58 @@ class ChessBoardState private constructor(
                 GameResult.DRAW_STALEMATE
             }
         }
-        if (halfMoveClock >= 100) return GameResult.DRAW_FIFTY_MOVE
+        if (halfMoveClock >= 150) return GameResult.DRAW_SEVENTY_FIVE_MOVE
         val key = positionKey()
-        if ((positionHistory[key] ?: 0) >= 3) return GameResult.DRAW_REPETITION
+        if ((positionHistory[key] ?: 0) >= 5) return GameResult.DRAW_FIVE_FOLD
         if (hasInsufficientMaterial()) return GameResult.DRAW_INSUFFICIENT_MATERIAL
         return GameResult.ONGOING
+    }
+
+    /**
+     * Claimable draws per Ruqaa Section 9.2:
+     * 3-fold repetition or 50-move rule (100 half-moves).
+     */
+    fun canClaimDraw(): String? {
+        val key = positionKey()
+        val reps = positionHistory[key] ?: 0
+        return when {
+            reps >= 3 -> "يمكن طلب التعادل (تكرار الوضعية ٣ مرات)"
+            halfMoveClock >= 100 -> "يمكن طلب التعادل (قاعدة ٥٠ نقلة)"
+            else -> null
+        }
+    }
+
+    /**
+     * Ruqaa Section 9.2: On clock expiry, if the non-timed-out side cannot deliver checkmate
+     * due to insufficient material, award DRAW_TIMEOUT_INSUFFICIENT.
+     */
+    fun evaluateTimeoutResult(timedOutColor: PieceColor): GameResult {
+        val winner = timedOutColor.opposite()
+        return if (hasInsufficientMatingMaterialFor(winner)) {
+            GameResult.DRAW_TIMEOUT_INSUFFICIENT
+        } else if (timedOutColor == PieceColor.WHITE) {
+            GameResult.WHITE_TIMEOUT
+        } else {
+            GameResult.BLACK_TIMEOUT
+        }
+    }
+
+    fun hasInsufficientMatingMaterialFor(color: PieceColor): Boolean {
+        var pawnsRooksQueens = 0
+        var knights = 0
+        var bishops = 0
+        for (i in 0..63) {
+            val p = board[i] ?: continue
+            if (p.color != color || p.type == PieceType.KING) continue
+            when (p.type) {
+                PieceType.PAWN, PieceType.ROOK, PieceType.QUEEN -> pawnsRooksQueens++
+                PieceType.KNIGHT -> knights++
+                PieceType.BISHOP -> bishops++
+                PieceType.KING -> {}
+            }
+        }
+        if (pawnsRooksQueens > 0) return false
+        return (knights + bishops) <= 1
     }
 
     fun hasInsufficientMaterial(): Boolean {

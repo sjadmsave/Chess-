@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -28,6 +29,8 @@ import androidx.compose.material.icons.rounded.BarChart
 import androidx.compose.material.icons.rounded.ChevronLeft
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Extension
+import androidx.compose.material.icons.rounded.Group
+import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.LocalFireDepartment
 import androidx.compose.material.icons.rounded.PictureInPictureAlt
 import androidx.compose.material.icons.rounded.PlayArrow
@@ -55,7 +58,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
@@ -66,14 +68,16 @@ import androidx.compose.ui.unit.dp
 import com.example.chess.BotPersona
 import com.example.chess.ChessBoardState
 import com.example.chess.EnginePersonality
+import com.example.chess.GameMode
 import com.example.chess.PieceColor
 import com.example.chess.PuzzleRepository
+import com.example.chess.StrengthTier
 import com.example.chess.TimeControl
 import com.example.data.SavedGameEntity
 import com.example.data.UserPreferences
 import com.example.data.formatOpponentTitle
 import com.example.ui.components.MiniBoardThumbnail
-import com.example.ui.theme.MonoFontFamily
+import com.example.ui.theme.formatArabicNumber
 
 @Composable
 fun HomeScreen(
@@ -81,11 +85,13 @@ fun HomeScreen(
     ongoingGame: SavedGameEntity?,
     onStartCustomMatch: (PieceColor, Int, EnginePersonality, Boolean, TimeControl) -> Unit,
     onStartBotMatch: (BotPersona, PieceColor, Boolean, TimeControl) -> Unit,
+    onStartLocalMatch: (TimeControl) -> Unit,
     onResumeGame: (SavedGameEntity) -> Unit,
     onActivateFloatingWindow: () -> Unit,
     onOpenImportDialog: () -> Unit,
     onOpenDailyPuzzle: () -> Unit,
-    onOpenStats: () -> Unit
+    onOpenStats: () -> Unit,
+    onOpenAboutLicenses: () -> Unit
 ) {
     var showNewMatchDialog by remember { mutableStateOf(false) }
 
@@ -100,6 +106,12 @@ fun HomeScreen(
         } ?: ChessBoardState.initial()
     }
 
+    val currentEloText = if (prefs.customEngineElo <= 0) {
+        "${prefs.strengthPreset.nameAr} (${if (prefs.strengthPreset.targetElo <= 0) "بلا حد" else "${formatArabicNumber(prefs.strengthPreset.targetElo)} إيلو"})"
+    } else {
+        "نحو ${formatArabicNumber(prefs.customEngineElo)} إيلو"
+    }
+
     Box(
         modifier = Modifier.fillMaxSize(),
         contentAlignment = Alignment.TopCenter
@@ -111,7 +123,7 @@ fun HomeScreen(
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 104.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            // Top Greeting & Badges (Screenshot 4 style)
+            // Top Header & Badges
             item {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -120,13 +132,13 @@ fun HomeScreen(
                 ) {
                     Column {
                         Text(
-                            text = "مساحتك للشطرنج",
+                            text = "رُقعة",
                             style = MaterialTheme.typography.headlineMedium,
                             fontWeight = FontWeight.ExtraBold,
                             color = MaterialTheme.colorScheme.onBackground
                         )
                         Text(
-                            text = "محرك ذكي • تحديات متدرجة • أوفلاين بالكامل",
+                            text = "محرك Stockfish ذكي • تحليل وتدريب أوفلاين بالكامل",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -150,8 +162,7 @@ fun HomeScreen(
                                     modifier = Modifier.size(16.dp)
                                 )
                                 Text(
-                                    text = "${prefs.dailyStreak}",
-                                    fontFamily = MonoFontFamily,
+                                    text = formatArabicNumber(prefs.dailyStreak),
                                     fontWeight = FontWeight.Bold,
                                     style = MaterialTheme.typography.labelMedium
                                 )
@@ -174,8 +185,7 @@ fun HomeScreen(
                                     modifier = Modifier.size(16.dp)
                                 )
                                 Text(
-                                    text = "${prefs.playerElo}",
-                                    fontFamily = MonoFontFamily,
+                                    text = formatArabicNumber(prefs.playerElo),
                                     fontWeight = FontWeight.Bold,
                                     color = MaterialTheme.colorScheme.primary,
                                     style = MaterialTheme.typography.labelMedium
@@ -186,7 +196,7 @@ fun HomeScreen(
                 }
             }
 
-            // Hero Board Thumbnail + Continue / New Match Card (Screenshot 4)
+            // Hero Board Thumbnail + Continue / New Match Card
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -216,15 +226,15 @@ fun HomeScreen(
                                 verticalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
                                 Text(
-                                    text = if (ongoingGame != null) "أكمل مباراتك" else "ابدأ مواجهة ذكية",
+                                    text = if (ongoingGame != null) "أكمل مباراتك" else "ابدأ مواجهة جديدة",
                                     style = MaterialTheme.typography.titleLarge,
                                     fontWeight = FontWeight.ExtraBold
                                 )
                                 Text(
                                     text = if (ongoingGame != null) {
-                                        "${formatOpponentTitle(ongoingGame.botId)} • ${ongoingGame.moveCount} نقلة"
+                                        "${formatOpponentTitle(ongoingGame.botId)} • ${formatArabicNumber(ongoingGame.moveCount)} نقلة"
                                     } else {
-                                        "مخصص • نحو ${prefs.customEngineElo} إيلو • ${prefs.enginePersonality.nameAr}"
+                                        "$currentEloText • ${prefs.enginePersonality.nameAr}"
                                     },
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -249,7 +259,7 @@ fun HomeScreen(
                                 ) {
                                     Icon(Icons.Rounded.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
                                     Spacer(Modifier.width(4.dp))
-                                    Text("تابع اللعب", fontWeight = FontWeight.Bold)
+                                    Text("استئناف المباراة", fontWeight = FontWeight.Bold)
                                 }
 
                                 OutlinedButton(
@@ -284,7 +294,7 @@ fun HomeScreen(
                 }
             }
 
-            // Section: العب بطريقتك (Screenshot 4)
+            // Section: العب بطريقتك
             item {
                 Text(
                     text = "العب بطريقتك",
@@ -296,6 +306,13 @@ fun HomeScreen(
 
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    HomeActionTile(
+                        title = "لاعبان محليان على جهاز واحد",
+                        subtitle = "تحدَّ صديقاً وجهاً لوجه مع ساعة شطرنج أو لعب حر",
+                        icon = Icons.Rounded.Group,
+                        tag = "home_local_2p_tile",
+                        onClick = { onStartLocalMatch(TimeControl.UNLIMITED) }
+                    )
                     HomeActionTile(
                         title = "تنشيط النافذة العائمة",
                         subtitle = "رقعة شطرنج عائمة تفاعلية فوق جميع التطبيقات",
@@ -312,17 +329,28 @@ fun HomeScreen(
                     )
                     HomeActionTile(
                         title = "اللغز اليومي والتحديات",
-                        subtitle = if (dailySolvedToday) "${dailyPuzzle.titleAr} • مكتمل اليوم ✓" else "${dailyPuzzle.titleAr} • تصنيف ${dailyPuzzle.rating} (+40 XP)",
+                        subtitle = if (dailySolvedToday) {
+                            "${dailyPuzzle.titleAr} • مكتمل اليوم ✓"
+                        } else {
+                            "${dailyPuzzle.titleAr} • تصنيف ${formatArabicNumber(dailyPuzzle.rating)} (+${formatArabicNumber(40)} XP)"
+                        },
                         icon = Icons.Rounded.Extension,
                         tag = "daily_puzzle_card",
                         onClick = onOpenDailyPuzzle
                     )
                     HomeActionTile(
                         title = "إحصاءاتك وتقاريرك",
-                        subtitle = "منحنى تصنيف ELO وتشخيص نقاط القوة والضعف",
+                        subtitle = "نتائجك حسب القوة والشخصية وتشخيص نقاط القوة والضعف",
                         icon = Icons.Rounded.BarChart,
                         tag = "home_stats_tile",
                         onClick = onOpenStats
+                    )
+                    HomeActionTile(
+                        title = "حول رُقعة والتراخيص",
+                        subtitle = "الإصدار ٣.٢.٣ • تراخيص Stockfish GPLv3 وخط IBM Plex",
+                        icon = Icons.Rounded.Info,
+                        tag = "home_about_tile",
+                        onClick = onOpenAboutLicenses
                     )
                 }
             }
@@ -342,7 +370,7 @@ fun HomeScreen(
                         fontWeight = FontWeight.ExtraBold
                     )
                     Text(
-                        text = "${BotPersona.entries.size} خصوم",
+                        text = "${formatArabicNumber(BotPersona.entries.size)} خصوم",
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.primary,
                         fontWeight = FontWeight.Bold
@@ -358,7 +386,7 @@ fun HomeScreen(
                     items(BotPersona.entries) { bot ->
                         Card(
                             onClick = {
-                                onStartBotMatch(bot, PieceColor.WHITE, prefs.adaptiveMode, TimeControl.RAPID_10)
+                                onStartBotMatch(bot, PieceColor.WHITE, prefs.adaptiveMode, TimeControl.MIN_10)
                             },
                             modifier = Modifier
                                 .width(190.dp)
@@ -392,8 +420,7 @@ fun HomeScreen(
                                             maxLines = 1
                                         )
                                         Text(
-                                            text = "${bot.elo} ELO",
-                                            fontFamily = MonoFontFamily,
+                                            text = "${formatArabicNumber(bot.elo)} إيلو",
                                             style = MaterialTheme.typography.labelSmall,
                                             color = bot.accentColor,
                                             fontWeight = FontWeight.Bold
@@ -425,6 +452,10 @@ fun HomeScreen(
             onStartBot = { bot, color, adaptive, timeControl ->
                 showNewMatchDialog = false
                 onStartBotMatch(bot, color, adaptive, timeControl)
+            },
+            onStartLocal = { timeControl ->
+                showNewMatchDialog = false
+                onStartLocalMatch(timeControl)
             },
             onDismiss = { showNewMatchDialog = false }
         )
@@ -491,11 +522,12 @@ private fun NewMatchWizardDialog(
     prefs: UserPreferences,
     onStartCustom: (PieceColor, Int, EnginePersonality, Boolean, TimeControl) -> Unit,
     onStartBot: (BotPersona, PieceColor, Boolean, TimeControl) -> Unit,
+    onStartLocal: (TimeControl) -> Unit,
     onDismiss: () -> Unit
 ) {
-    var useCustomEngine by remember { mutableStateOf(true) }
+    var mode by remember { mutableStateOf(GameMode.VS_ENGINE) }
     var selectedColor by remember { mutableStateOf(PieceColor.WHITE) }
-    var elo by remember { mutableIntStateOf(prefs.customEngineElo) }
+    var elo by remember { mutableIntStateOf(prefs.effectiveEngineElo) }
     var personality by remember { mutableStateOf(prefs.enginePersonality) }
     var humanStyle by remember { mutableStateOf(prefs.humanStyleEnabled) }
     var selectedBot by remember { mutableStateOf(BotPersona.byId(prefs.selectedBotId)) }
@@ -507,94 +539,128 @@ private fun NewMatchWizardDialog(
         text = {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 item {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilterChip(
-                            selected = useCustomEngine,
-                            onClick = { useCustomEngine = true },
-                            label = { Text("محرك مخصص") }
-                        )
-                        FilterChip(
-                            selected = !useCustomEngine,
-                            onClick = { useCustomEngine = false },
-                            label = { Text("شخصيات عالمية") }
-                        )
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        items(GameMode.entries) { gm ->
+                            FilterChip(
+                                selected = mode == gm,
+                                onClick = { mode = gm },
+                                label = { Text(gm.nameAr) },
+                                modifier = Modifier.testTag("wizard_mode_${gm.id}")
+                            )
+                        }
+                    }
+                }
+
+                if (mode != GameMode.LOCAL_TWO_PLAYER) {
+                    item {
+                        Text("لون قطعك:", style = MaterialTheme.typography.labelLarge)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FilterChip(
+                                selected = selectedColor == PieceColor.WHITE,
+                                onClick = { selectedColor = PieceColor.WHITE },
+                                label = { Text("الأبيض ♔") }
+                            )
+                            FilterChip(
+                                selected = selectedColor == PieceColor.BLACK,
+                                onClick = { selectedColor = PieceColor.BLACK },
+                                label = { Text("الأسود ♚") }
+                            )
+                        }
+                    }
+                }
+
+                when (mode) {
+                    GameMode.VS_ENGINE -> {
+                        item {
+                            Text("المستويات الخمسة:", style = MaterialTheme.typography.labelLarge)
+                            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                items(StrengthTier.entries) { tier ->
+                                    val selected = if (tier == StrengthTier.MAX) elo <= 0 else elo in tier.eloRange || elo == tier.targetElo
+                                    FilterChip(
+                                        selected = selected,
+                                        onClick = { elo = tier.targetElo },
+                                        label = {
+                                            Text(
+                                                if (tier.targetElo <= 0) "${tier.nameAr} (بلا حد)"
+                                                else "${tier.nameAr} (${formatArabicNumber(tier.targetElo)})"
+                                            )
+                                        }
+                                    )
+                                }
+                            }
+                        }
+
+                        item {
+                            val strengthDesc = if (elo <= 0) "بلا حد (أقصى قوة)" else "نحو ${formatArabicNumber(elo)} إيلو"
+                            Text(
+                                text = "قوة المحرك: $strengthDesc",
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Slider(
+                                value = if (elo <= 0) 3000f else elo.toFloat(),
+                                onValueChange = { elo = StrengthTier.snapElo(it.toInt()) },
+                                valueRange = 200f..3000f,
+                                steps = 55
+                            )
+                        }
+
+                        item {
+                            Text("شخصية المحرك:", style = MaterialTheme.typography.labelLarge)
+                            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                items(EnginePersonality.entries) { p ->
+                                    FilterChip(
+                                        selected = personality == p,
+                                        onClick = { personality = p },
+                                        label = { Text(p.nameAr) }
+                                    )
+                                }
+                            }
+                        }
+
+                        item {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Icon(Icons.Rounded.AutoAwesome, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                                    Text("الأسلوب البشري", style = MaterialTheme.typography.bodyMedium)
+                                }
+                                Switch(checked = humanStyle, onCheckedChange = { humanStyle = it })
+                            }
+                        }
+                    }
+
+                    GameMode.VS_BOT_PERSONA -> {
+                        item {
+                            Text("اختر الأستاذ:", style = MaterialTheme.typography.labelLarge)
+                            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                items(BotPersona.entries) { bot ->
+                                    FilterChip(
+                                        selected = selectedBot == bot,
+                                        onClick = { selectedBot = bot },
+                                        label = { Text("${bot.nameAr} (${formatArabicNumber(bot.elo)})") }
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    GameMode.LOCAL_TWO_PLAYER -> {
+                        item {
+                            Text(
+                                text = "يتناوب لاعبان على الرقعة نفسها دون تدخل المحرك.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 }
 
                 item {
-                    Text("لون قطعك:", style = MaterialTheme.typography.labelLarge)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilterChip(
-                            selected = selectedColor == PieceColor.WHITE,
-                            onClick = { selectedColor = PieceColor.WHITE },
-                            label = { Text("الأبيض ♔") }
-                        )
-                        FilterChip(
-                            selected = selectedColor == PieceColor.BLACK,
-                            onClick = { selectedColor = PieceColor.BLACK },
-                            label = { Text("الأسود ♚") }
-                        )
-                    }
-                }
-
-                if (useCustomEngine) {
-                    item {
-                        Text(
-                            text = "قوة المحرك: نحو $elo إيلو",
-                            fontFamily = MonoFontFamily,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        Slider(
-                            value = elo.toFloat(),
-                            onValueChange = { elo = ((it.toInt() / 50) * 50).coerceIn(200, 3000) },
-                            valueRange = 200f..3000f
-                        )
-                    }
-
-                    item {
-                        Text("شخصية المحرك:", style = MaterialTheme.typography.labelLarge)
-                        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            items(EnginePersonality.entries) { p ->
-                                FilterChip(
-                                    selected = personality == p,
-                                    onClick = { personality = p },
-                                    label = { Text(p.nameAr) }
-                                )
-                            }
-                        }
-                    }
-
-                    item {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Icon(Icons.Rounded.AutoAwesome, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
-                                Text("الأسلوب البشري", style = MaterialTheme.typography.bodyMedium)
-                            }
-                            Switch(checked = humanStyle, onCheckedChange = { humanStyle = it })
-                        }
-                    }
-                } else {
-                    item {
-                        Text("اختر الأستاذ:", style = MaterialTheme.typography.labelLarge)
-                        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            items(BotPersona.entries) { bot ->
-                                FilterChip(
-                                    selected = selectedBot == bot,
-                                    onClick = { selectedBot = bot },
-                                    label = { Text("${bot.nameAr} (${bot.elo})") }
-                                )
-                            }
-                        }
-                    }
-                }
-
-                item {
-                    Text("إعداد الوقت:", style = MaterialTheme.typography.labelLarge)
+                    Text("إعداد الساعة:", style = MaterialTheme.typography.labelLarge)
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         items(TimeControl.entries) { tc ->
                             FilterChip(
@@ -613,12 +679,13 @@ private fun NewMatchWizardDialog(
         confirmButton = {
             Button(
                 onClick = {
-                    if (useCustomEngine) {
-                        onStartCustom(selectedColor, elo, personality, humanStyle, selectedTimeControl)
-                    } else {
-                        onStartBot(selectedBot, selectedColor, prefs.adaptiveMode, selectedTimeControl)
+                    when (mode) {
+                        GameMode.VS_ENGINE -> onStartCustom(selectedColor, elo, personality, humanStyle, selectedTimeControl)
+                        GameMode.VS_BOT_PERSONA -> onStartBot(selectedBot, selectedColor, prefs.adaptiveMode, selectedTimeControl)
+                        GameMode.LOCAL_TWO_PLAYER -> onStartLocal(selectedTimeControl)
                     }
                 },
+                modifier = Modifier.heightIn(min = 48.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
             ) {
                 Text("ابدأ اللعب")

@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">أرينا الشطرنج</string>
+    <string name="app_name">رُقعة</string>
     <string name="notification_channel_name">تذكيرات التدريب الذكي</string>
     <string name="notification_channel_desc">تنبيهات تحفيزية يومية لحل الألغاز وتحسين مستواك في الشطرنج</string>
 </resources>

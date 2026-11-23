@@ -174,7 +174,7 @@ fun ImportPgnFenDialog(
 fun FenBoardSetupSheetContent(
     boardTheme: BoardTheme,
     pieceStyle: PieceStyle,
-    onStartFromFen: (fen: String, playerColor: PieceColor) -> Unit,
+    onStartFromFen: (fen: String, playerColor: PieceColor, twoPlayer: Boolean) -> Unit,
     onDismiss: () -> Unit
 ) {
     var boardArray by remember {
@@ -182,6 +182,7 @@ fun FenBoardSetupSheetContent(
     }
     var sideToMove by remember { mutableStateOf(PieceColor.WHITE) }
     var playerColor by remember { mutableStateOf(PieceColor.WHITE) }
+    var twoPlayerMode by remember { mutableStateOf(false) }
     // null = erase piece
     var activeBrush by remember { mutableStateOf<ChessPiece?>(ChessPiece(PieceType.QUEEN, PieceColor.WHITE)) }
     var fenText by remember { mutableStateOf(ChessBoardState.INITIAL_FEN) }
@@ -354,47 +355,68 @@ fun FenBoardSetupSheetContent(
             }
         }
 
-        // Side to move & Player side
+        // Side to move, Opponent Mode & Player side
         item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("الدور:", style = MaterialTheme.typography.labelLarge)
-                FilterChip(
-                    selected = sideToMove == PieceColor.WHITE,
-                    onClick = {
-                        sideToMove = PieceColor.WHITE
-                        fenText = rebuildFenFromArray(boardArray, PieceColor.WHITE)
-                    },
-                    label = { Text("الأبيض") }
-                )
-                FilterChip(
-                    selected = sideToMove == PieceColor.BLACK,
-                    onClick = {
-                        sideToMove = PieceColor.BLACK
-                        fenText = rebuildFenFromArray(boardArray, PieceColor.BLACK)
-                    },
-                    label = { Text("الأسود") }
-                )
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("تلعب بـ:", style = MaterialTheme.typography.labelLarge)
-                FilterChip(
-                    selected = playerColor == PieceColor.WHITE,
-                    onClick = { playerColor = PieceColor.WHITE },
-                    label = { Text("الأبيض") }
-                )
-                FilterChip(
-                    selected = playerColor == PieceColor.BLACK,
-                    onClick = { playerColor = PieceColor.BLACK },
-                    label = { Text("الأسود") }
-                )
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("الوضع:", style = MaterialTheme.typography.labelLarge)
+                    FilterChip(
+                        selected = !twoPlayerMode,
+                        onClick = { twoPlayerMode = false },
+                        label = { Text("ضد المحرك") }
+                    )
+                    FilterChip(
+                        selected = twoPlayerMode,
+                        onClick = { twoPlayerMode = true },
+                        label = { Text("لاعبان محليان") }
+                    )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("الدور:", style = MaterialTheme.typography.labelLarge)
+                    FilterChip(
+                        selected = sideToMove == PieceColor.WHITE,
+                        onClick = {
+                            sideToMove = PieceColor.WHITE
+                            fenText = rebuildFenFromArray(boardArray, PieceColor.WHITE)
+                        },
+                        label = { Text("الأبيض") }
+                    )
+                    FilterChip(
+                        selected = sideToMove == PieceColor.BLACK,
+                        onClick = {
+                            sideToMove = PieceColor.BLACK
+                            fenText = rebuildFenFromArray(boardArray, PieceColor.BLACK)
+                        },
+                        label = { Text("الأسود") }
+                    )
+                }
+                if (!twoPlayerMode) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("تلعب بـ:", style = MaterialTheme.typography.labelLarge)
+                        FilterChip(
+                            selected = playerColor == PieceColor.WHITE,
+                            onClick = { playerColor = PieceColor.WHITE },
+                            label = { Text("الأبيض") }
+                        )
+                        FilterChip(
+                            selected = playerColor == PieceColor.BLACK,
+                            onClick = { playerColor = PieceColor.BLACK },
+                            label = { Text("الأسود") }
+                        )
+                    }
+                }
             }
         }
 
@@ -430,7 +452,7 @@ fun FenBoardSetupSheetContent(
                 Button(
                     onClick = {
                         PgnFenCodec.parseFenStrict(fenText).onSuccess {
-                            onStartFromFen(fenText.trim(), playerColor)
+                            onStartFromFen(fenText.trim(), playerColor, twoPlayerMode)
                             onDismiss()
                         }.onFailure { err ->
                             errorMsg = err.message ?: "وضعية FEN غير صالحة"

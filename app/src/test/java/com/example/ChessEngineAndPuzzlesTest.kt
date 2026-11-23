@@ -1,20 +1,31 @@
 package com.example
 
+import com.example.chess.BoardTheme
 import com.example.chess.BotPersona
 import com.example.chess.ChessBoardState
 import com.example.chess.ChessCoachAnalyzer
 import com.example.chess.ChessEngine
+import com.example.chess.EngineBackendPreference
+import com.example.chess.EnginePersonality
 import com.example.chess.GamePhase
 import com.example.chess.GameResult
 import com.example.chess.MoveQuality
+import com.example.chess.PersonalityRisk
+import com.example.chess.PgnFenCodec
 import com.example.chess.PieceColor
+import com.example.chess.PieceStyle
 import com.example.chess.PuzzleCategory
 import com.example.chess.PuzzleRepository
 import com.example.chess.RecordedMove
+import com.example.chess.StockfishUciEngine
+import com.example.chess.StrengthTier
+import com.example.chess.SyzygyManager
 import com.example.chess.TimeControl
 import com.example.ui.components.formatEvalPawns
 import com.example.ui.components.groupMovesIntoTurns
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -64,10 +75,11 @@ class ChessEngineAndPuzzlesTest {
     @Test
     fun verifyExpandedPersonasPieceStylesAndBoardThemes() {
         assertEquals(8, BotPersona.entries.size)
-        assertEquals(6, com.example.chess.PieceStyle.entries.size)
-        assertEquals(8, com.example.chess.BoardTheme.entries.size)
+        assertEquals(6, PieceStyle.entries.size)
+        assertEquals(8, BoardTheme.entries.size)
         assertEquals(4, TimeControl.entries.size)
-        assertEquals(10, com.example.chess.EnginePersonality.entries.size)
+        assertEquals(13, EnginePersonality.entries.size)
+        assertEquals(5, StrengthTier.entries.size)
 
         val state = ChessBoardState.initial()
         for (bot in BotPersona.entries) {
@@ -77,22 +89,22 @@ class ChessEngineAndPuzzlesTest {
     }
 
     @Test
-    fun verifyPgnFenCodecAndCustomEnginePersonalities() {
+    fun verifyPgnFenCodecAndAll13EnginePersonalities() {
         val samplePgn = "1. e4 e5 2. Nf3 Nc6 3. Bb5 a6"
-        val parsed = com.example.chess.PgnFenCodec.importAutoDetect(samplePgn)
+        val parsed = PgnFenCodec.importAutoDetect(samplePgn)
         assertTrue(parsed.isSuccess)
         val data = parsed.getOrNull()!!
         assertEquals(6, data.moves.size)
         assertEquals("e4", data.moves[0].san)
 
         val fenStr = data.finalBoard.toFen()
-        val parsedFen = com.example.chess.PgnFenCodec.parseFenStrict(fenStr)
+        val parsedFen = PgnFenCodec.parseFenStrict(fenStr)
         assertTrue(parsedFen.isSuccess)
 
-        val exportedPgn = com.example.chess.PgnFenCodec.exportPgn(data.moves)
+        val exportedPgn = PgnFenCodec.exportPgn(data.moves)
         assertTrue(exportedPgn.contains("1. e4 e5"))
 
-        for (personality in com.example.chess.EnginePersonality.entries) {
+        for (personality in EnginePersonality.entries) {
             val moveRes = ChessEngine.chooseCustomEngineMove(
                 state = data.finalBoard,
                 targetElo = 1400,
@@ -100,7 +112,104 @@ class ChessEngineAndPuzzlesTest {
                 humanStyle = true
             )
             assertNotNull("Personality ${personality.id} failed to produce move", moveRes.bestMove)
+            assertTrue(data.finalBoard.generateLegalMoves().contains(moveRes.bestMove))
         }
+
+        val multiPv = ChessEngine.evaluateMultiPv(data.finalBoard, multiPv = 3, timeLimitMs = 300L, maxDepth = 2)
+        assertTrue(multiPv.isNotEmpty())
+        assertTrue(multiPv.size <= 3)
+        assertEquals(1, multiPv.first().rank)
+    }
+
+    @Test
+    fun verifyRuqaaStrengthTranslationFormulas() {
+        assertEquals(-1, StrengthTier.snapElo(-1))
+        assertEquals(200, StrengthTier.snapElo(120))
+        assertEquals(700, StrengthTier.snapElo(712))
+        assertEquals(3000, StrengthTier.snapElo(3100))
+
+        assertEquals(StrengthTier.BEGINNER, StrengthTier.fromElo(300))
+        assertEquals(StrengthTier.EASY, StrengthTier.fromElo(700))
+        assertEquals(StrengthTier.MEDIUM, StrengthTier.fromElo(1200))
+        assertEquals(StrengthTier.STRONG, StrengthTier.fromElo(1800))
+        assertEquals(StrengthTier.MAX, StrengthTier.fromElo(-1))
+
+        assertNull(ChessEngine.computeNodeCap(-1))
+        assertEquals(5100, ChessEngine.computeNodeCap(300))
+        assertEquals(7900, ChessEngine.computeNodeCap(700))
+        assertEquals(18000, ChessEngine.computeNodeCap(1320))
+        assertTrue((ChessEngine.computeNodeCap(2800) ?: 0) in 175_000..177_000)
+
+        assertEquals(350, ChessEngine.computeBaseMoveTimeMs(300))
+        assertEquals(1100, ChessEngine.computeBaseMoveTimeMs(-1))
+        assertEquals(80, ChessEngine.computeMoveTimeWithClockMs(1800, 600L))
+
+        assertEquals(1.0, ChessEngine.computeStockfishProbability(1320), 0.0001)
+        assertEquals(1.0, ChessEngine.computeStockfishProbability(-1), 0.0001)
+        assertTrue(ChessEngine.computeStockfishProbability(300) < 0.05)
+
+        val balancedCap = ChessEngine.computePersonalityLossCapCp(StrengthTier.EASY, PersonalityRisk.BALANCED, 100)
+        assertEquals(82, balancedCap)
+        val aggressiveCap = ChessEngine.computePersonalityLossCapCp(StrengthTier.EASY, PersonalityRisk.AGGRESSIVE, 100)
+        assertEquals(119, aggressiveCap)
+    }
+
+    @Test
+    fun verifyRuqaaDrawRulesAndTimeoutInsufficientMaterial() {
+        // 50-move claimable vs 75-move mandatory draw
+        val fen50 = "8/8/4k3/8/8/4K3/4Q3/8 w - - 100 60"
+        val state50 = ChessBoardState.fromFen(fen50)
+        assertNotNull(state50.canClaimDraw())
+        assertEquals(GameResult.ONGOING, state50.evaluateGameResult())
+
+        val fen75 = "8/8/4k3/8/8/4K3/4Q3/8 w - - 150 90"
+        val state75 = ChessBoardState.fromFen(fen75)
+        assertEquals(GameResult.DRAW_SEVENTY_FIVE_MOVE, state75.evaluateGameResult())
+
+        // Timeout when opponent has only King + Knight (cannot mate except weird cases, FIDE treats K+N vs K as insufficient)
+        val knVsK = ChessBoardState.fromFen("8/8/4k3/8/4N3/4K3/8/8 b - - 0 40")
+        assertEquals(GameResult.DRAW_TIMEOUT_INSUFFICIENT, knVsK.evaluateTimeoutResult(PieceColor.BLACK))
+
+        val kqVsK = ChessBoardState.fromFen("8/8/4k3/8/4Q3/4K3/8/8 b - - 0 40")
+        assertEquals(GameResult.BLACK_TIMEOUT, kqVsK.evaluateTimeoutResult(PieceColor.BLACK))
+    }
+
+    @Test
+    fun verifyCoachRuqaaThresholdsCacheKeyAnd3StageHint() {
+        assertEquals("تحليل غير مكتمل", ChessCoachAnalyzer.gradeLabelFromLoss(null))
+        assertEquals("جيدة", ChessCoachAnalyzer.gradeLabelFromLoss(0))
+        assertEquals("جيدة", ChessCoachAnalyzer.gradeLabelFromLoss(49))
+        assertEquals("عدم دقة", ChessCoachAnalyzer.gradeLabelFromLoss(50))
+        assertEquals("عدم دقة", ChessCoachAnalyzer.gradeLabelFromLoss(99))
+        assertEquals("خطأ", ChessCoachAnalyzer.gradeLabelFromLoss(100))
+        assertEquals("خطأ", ChessCoachAnalyzer.gradeLabelFromLoss(199))
+        assertEquals("خطأ كبير", ChessCoachAnalyzer.gradeLabelFromLoss(200))
+
+        val k1 = ChessCoachAnalyzer.computeReviewCacheKey("sf19", ChessBoardState.INITIAL_FEN, listOf("e2e4", "e7e5"))
+        val k2 = ChessCoachAnalyzer.computeReviewCacheKey("sf19", ChessBoardState.INITIAL_FEN, listOf("e2e4", "e7e5"))
+        val k3 = ChessCoachAnalyzer.computeReviewCacheKey("sf19", ChessBoardState.INITIAL_FEN, listOf("d2d4", "d7d5"))
+        assertEquals(k1, k2)
+        assertNotEquals(k1, k3)
+
+        val hint = ChessCoachAnalyzer.generateProgressiveHint(ChessBoardState.initial())
+        assertNotNull(hint)
+        assertTrue(hint!!.conceptAr.isNotBlank())
+        assertTrue(hint.pieceHintAr.isNotBlank())
+        assertTrue(hint.exactMoveAr.isNotBlank())
+    }
+
+    @Test
+    fun verifySyzygyValidationRules() {
+        val validWdlHeader = byteArrayOf(0x71.toByte(), 0xE8.toByte(), 0x23.toByte(), 0x5D.toByte())
+        val validDtzHeader = byteArrayOf(0xD7.toByte(), 0x66.toByte(), 0x0C.toByte(), 0xA5.toByte())
+        val badHeader = byteArrayOf(0x00, 0x01, 0x02, 0x03)
+
+        assertNull(SyzygyManager.validateMetadataAndMagic("KQvK.rtbw", validWdlHeader, 16L + 64L))
+        assertNull(SyzygyManager.validateMetadataAndMagic("KPvKP.rtbz", validDtzHeader, 16L + 128L))
+        assertNotNull(SyzygyManager.validateMetadataAndMagic("KQvK.rtbw", badHeader, 16L + 64L))
+        assertNotNull(SyzygyManager.validateMetadataAndMagic("KQvK.rtbw", validWdlHeader, 64L)) // % 64 != 16
+        assertNotNull(SyzygyManager.validateMetadataAndMagic("INVALID.rtbw", validWdlHeader, 80L))
+        assertNotNull(SyzygyManager.validateMetadataAndMagic("KQRBNvKQRBN.rtbw", validWdlHeader, 80L))
     }
 
     @Test
@@ -151,8 +260,8 @@ class ChessEngineAndPuzzlesTest {
     }
 
     @Test
-    fun verifyStockfishUciParsingAndUpgradedEngineTelemetry() = kotlinx.coroutines.runBlocking {
-        val cpInfo = com.example.chess.StockfishUciEngine.parseUciInfoLine(
+    fun verifyStockfishUciParsingAndUpgradedEngineTelemetry() = runBlocking {
+        val cpInfo = StockfishUciEngine.parseUciInfoLine(
             "info depth 14 seldepth 20 multipv 1 score cp 42 nodes 128450 nps 850000 time 151 pv e2e4 e7e5 g1f3"
         )
         assertNotNull(cpInfo)
@@ -161,24 +270,23 @@ class ChessEngineAndPuzzlesTest {
         assertEquals(128450, cpInfo.nodes)
         assertEquals(listOf("e2e4", "e7e5", "g1f3"), cpInfo.pv)
 
-        val mateInfo = com.example.chess.StockfishUciEngine.parseUciInfoLine(
+        val mateInfo = StockfishUciEngine.parseUciInfoLine(
             "info depth 9 score mate 2 nodes 4500 pv d1h5 g7g6 h5e5"
         )
         assertNotNull(mateInfo)
-        assertTrue(mateInfo!!.scoreCp > 90_000)
+        assertEquals(2, mateInfo!!.mateIn)
+        assertTrue(mateInfo.scoreCp > 30_000)
 
-        // Zobrist determinism
         val start = ChessBoardState.initial()
         assertEquals(ChessEngine.computeZobristHash(start), ChessEngine.computeZobristHash(ChessBoardState.initial()))
 
-        // Mate-in-1 detection with upgraded search (White to move, Qh5 + Bc4 delivers Qf7#)
         val scholarsPreMate = ChessBoardState.fromFen("r1bqkbnr/pppp1ppp/2n5/4p2Q/2B1P3/8/PPPP1PPP/RNB1K1NR w KQkq - 4 4")
-        val mateResult = com.example.chess.StockfishUciEngine.computeMove(
+        val mateResult = StockfishUciEngine.computeMove(
             context = null,
             state = scholarsPreMate,
-            backendPreference = com.example.chess.EngineBackendPreference.BUILTIN_ENGINE,
+            backendPreference = EngineBackendPreference.BUILTIN_ENGINE,
             targetElo = 2600,
-            personality = com.example.chess.EnginePersonality.TRADITIONAL,
+            personality = EnginePersonality.CLASSIC,
             humanStyle = false,
             moveTimeMs = 800,
             threads = 2

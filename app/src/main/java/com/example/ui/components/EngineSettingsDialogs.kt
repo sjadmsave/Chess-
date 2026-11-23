@@ -7,11 +7,10 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -19,17 +18,21 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Balance
 import androidx.compose.material.icons.rounded.Bolt
+import androidx.compose.material.icons.rounded.Casino
+import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.CrisisAlert
+import androidx.compose.material.icons.rounded.Extension
+import androidx.compose.material.icons.rounded.Flag
 import androidx.compose.material.icons.rounded.HourglassTop
 import androidx.compose.material.icons.rounded.Hub
 import androidx.compose.material.icons.rounded.LocalFireDepartment
-import androidx.compose.material.icons.rounded.MoreHoriz
-import androidx.compose.material.icons.rounded.Psychology
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.Timeline
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -40,6 +43,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -50,37 +54,142 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.chess.EnginePersonality
-import com.example.ui.theme.MonoFontFamily
+import com.example.chess.PersonalityRisk
+import com.example.chess.StrengthTier
+import com.example.ui.theme.formatArabicNumber
+import kotlin.math.roundToInt
 
 @Composable
 fun EnginePersonalitySheetContent(
     selectedPersonality: EnginePersonality,
-    onSelect: (EnginePersonality) -> Unit,
+    intensity: Int,
+    risk: PersonalityRisk,
+    onSelectPersonality: (EnginePersonality) -> Unit,
+    onIntensityChange: (Int) -> Unit,
+    onSelectRisk: (PersonalityRisk) -> Unit,
     onDismiss: () -> Unit
 ) {
+    var localIntensity by remember(intensity) { mutableIntStateOf(intensity) }
+
     LazyColumn(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 18.dp),
         contentPadding = PaddingValues(bottom = 26.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         item {
-            Text(
-                text = "اختر شخصية المحرك",
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(bottom = 4.dp)
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "شخصية المحرك",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "١٢ شخصية تكتيكية + الكلاسيكي الافتراضي",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                TextButton(onClick = onDismiss) {
+                    Text("تم", fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+
+        // Intensity Slider (0..100) + Risk Multiplier Selector
+        item {
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+            ) {
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "شدّة الشخصية",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = if (localIntensity == 0 || selectedPersonality == EnginePersonality.CLASSIC) {
+                                "٠٪ (معطّلة)"
+                            } else {
+                                "${formatArabicNumber(localIntensity)}٪"
+                            },
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    Slider(
+                        value = localIntensity.toFloat(),
+                        onValueChange = { localIntensity = it.roundToInt().coerceIn(0, 100) },
+                        onValueChangeFinished = { onIntensityChange(localIntensity) },
+                        valueRange = 0f..100f,
+                        modifier = Modifier.testTag("personality_intensity_slider")
+                    )
+
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
+
+                    Text(
+                        text = "حدود المخاطرة",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        PersonalityRisk.entries.forEach { option ->
+                            val selected = option == risk
+                            Surface(
+                                onClick = { onSelectRisk(option) },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .heightIn(min = 48.dp)
+                                    .testTag("risk_${option.id}"),
+                                shape = RoundedCornerShape(12.dp),
+                                color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
+                                border = BorderStroke(
+                                    1.dp,
+                                    if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
+                                )
+                            ) {
+                                Box(
+                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 10.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = option.nameAr,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                        color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         items(EnginePersonality.entries) { p ->
             val selected = p == selectedPersonality
             Surface(
-                onClick = {
-                    onSelect(p)
-                    onDismiss()
-                },
+                onClick = { onSelectPersonality(p) },
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("personality_${p.id}"),
@@ -104,46 +213,58 @@ fun EnginePersonalitySheetContent(
                 ) {
                     Box(
                         modifier = Modifier
-                            .size(36.dp)
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(MaterialTheme.colorScheme.surfaceVariant),
+                            .size(40.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(
+                                if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)
+                                else MaterialTheme.colorScheme.surfaceVariant
+                            ),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
                             imageVector = personalityIcon(p),
-                            contentDescription = null,
+                            contentDescription = p.nameAr,
                             tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(20.dp)
+                            modifier = Modifier.size(21.dp)
                         )
                     }
                     Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = p.nameAr,
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold
-                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                text = p.nameAr,
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant
+                            ) {
+                                Text(
+                                    text = p.styleBadgeAr,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
+                                )
+                            }
+                        }
                         Text(
                             text = p.descriptionAr,
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                    Icon(
-                        imageVector = Icons.Rounded.MoreHoriz,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(18.dp)
-                    )
+                    if (selected) {
+                        Icon(
+                            imageVector = Icons.Rounded.CheckCircle,
+                            contentDescription = "محددة",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
                 }
-            }
-        }
-
-        item {
-            TextButton(
-                onClick = onDismiss,
-                modifier = Modifier.padding(top = 4.dp)
-            ) {
-                Text("رجوع")
             }
         }
     }
@@ -152,17 +273,26 @@ fun EnginePersonalitySheetContent(
 @Composable
 fun EngineEloDialog(
     initialElo: Int,
-    onConfirm: (Int) -> Unit,
+    initialTier: StrengthTier,
+    onConfirmPreset: (StrengthTier) -> Unit,
+    onConfirmCustomElo: (Int) -> Unit,
     onDismiss: () -> Unit
 ) {
-    var elo by remember { mutableIntStateOf(initialElo) }
-    val levelLabel = when {
-        elo < 700 -> "مبتدئ"
-        elo < 1200 -> "متوسط"
-        elo < 1800 -> "متقدم"
-        elo < 2300 -> "مخصص • خبير"
-        else -> "أستاذ دولي كبير"
+    var usePresetUnlimited by remember {
+        mutableStateOf(initialElo <= 0)
     }
+    var selectedTier by remember { mutableStateOf(initialTier) }
+    var sliderElo by remember {
+        mutableIntStateOf(
+            if (initialElo <= 0) initialTier.targetElo.let { if (it <= 0) 2600 else it }
+            else StrengthTier.snapElo(initialElo)
+        )
+    }
+    var isCustomSlider by remember { mutableStateOf(initialElo > 0) }
+
+    val activeTier = if (usePresetUnlimited) StrengthTier.MAX
+    else if (isCustomSlider) StrengthTier.fromElo(sliderElo)
+    else selectedTier
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -170,56 +300,132 @@ fun EngineEloDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
-                    text = "$levelLabel • نحو $elo إيلو",
-                    fontFamily = MonoFontFamily,
+                    text = if (usePresetUnlimited) {
+                        "${StrengthTier.MAX.nameAr} • بلا حد (أقصى قوة)"
+                    } else {
+                        "${activeTier.nameAr} • نحو ${formatArabicNumber(sliderElo)} إيلو"
+                    },
                     style = MaterialTheme.typography.titleMedium,
                     color = MaterialTheme.colorScheme.primary,
                     fontWeight = FontWeight.Bold
                 )
-                Slider(
-                    value = elo.toFloat(),
-                    onValueChange = { elo = ((it.toInt() / 50) * 50).coerceIn(200, 3000) },
-                    valueRange = 200f..3000f
+
+                Text(
+                    text = "المستويات الخمسة:",
+                    style = MaterialTheme.typography.labelLarge
                 )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    StrengthTier.entries.forEach { tier ->
+                        val selected = if (tier == StrengthTier.MAX) {
+                            usePresetUnlimited || (!isCustomSlider && selectedTier == StrengthTier.MAX)
+                        } else {
+                            !usePresetUnlimited && (selectedTier == tier || activeTier == tier)
+                        }
+                        Surface(
+                            onClick = {
+                                selectedTier = tier
+                                isCustomSlider = false
+                                if (tier == StrengthTier.MAX) {
+                                    usePresetUnlimited = true
+                                    sliderElo = 2600
+                                } else {
+                                    usePresetUnlimited = false
+                                    sliderElo = tier.targetElo
+                                }
+                            },
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 48.dp)
+                                .testTag("strength_tier_${tier.id}"),
+                            shape = RoundedCornerShape(10.dp),
+                            color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+                            border = if (selected) BorderStroke(1.dp, MaterialTheme.colorScheme.primary) else null
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(vertical = 6.dp, horizontal = 2.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center
+                            ) {
+                                Text(
+                                    text = tier.nameAr,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                    color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = if (tier.targetElo <= 0) "∞" else formatArabicNumber(tier.targetElo),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+
+                FilterChip(
+                    selected = usePresetUnlimited,
+                    onClick = {
+                        usePresetUnlimited = !usePresetUnlimited
+                        if (usePresetUnlimited) {
+                            selectedTier = StrengthTier.MAX
+                            isCustomSlider = false
+                        } else {
+                            isCustomSlider = true
+                        }
+                    },
+                    label = { Text("بلا حد (أقصى قوة ممكنة)") },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("unlimited_strength_chip")
+                )
+
+                Text(
+                    text = "منزلق مخصّص (${formatArabicNumber(200)} – ${formatArabicNumber(3000)}، خطوة ${formatArabicNumber(50)}):",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Slider(
+                    value = sliderElo.toFloat(),
+                    enabled = !usePresetUnlimited,
+                    onValueChange = {
+                        usePresetUnlimited = false
+                        isCustomSlider = true
+                        sliderElo = StrengthTier.snapElo(it.toInt())
+                    },
+                    valueRange = 200f..3000f,
+                    steps = 55
+                )
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     OutlinedButton(
-                        onClick = { elo = (elo - 100).coerceAtLeast(200) },
-                        modifier = Modifier.weight(1f)
+                        onClick = {
+                            usePresetUnlimited = false
+                            isCustomSlider = true
+                            sliderElo = (sliderElo - 100).coerceAtLeast(200)
+                        },
+                        modifier = Modifier
+                            .weight(1f)
+                            .heightIn(min = 48.dp)
                     ) {
-                        Text("−100")
+                        Text("−${formatArabicNumber(100)}")
                     }
                     OutlinedButton(
-                        onClick = { elo = (elo + 100).coerceAtMost(3000) },
-                        modifier = Modifier.weight(1f)
+                        onClick = {
+                            usePresetUnlimited = false
+                            isCustomSlider = true
+                            sliderElo = (sliderElo + 100).coerceAtMost(3000)
+                        },
+                        modifier = Modifier
+                            .weight(1f)
+                            .heightIn(min = 48.dp)
                     ) {
-                        Text("+100")
-                    }
-                }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    listOf(800, 1400, 2000, 2600).forEach { preset ->
-                        Surface(
-                            onClick = { elo = preset },
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(10.dp),
-                            color = if (elo == preset) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
-                        ) {
-                            Box(
-                                modifier = Modifier.padding(vertical = 6.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = "$preset",
-                                    fontFamily = MonoFontFamily,
-                                    style = MaterialTheme.typography.labelMedium
-                                )
-                            }
-                        }
+                        Text("+${formatArabicNumber(100)}")
                     }
                 }
             }
@@ -228,7 +434,19 @@ fun EngineEloDialog(
             TextButton(onClick = onDismiss) { Text("إلغاء") }
         },
         confirmButton = {
-            Button(onClick = { onConfirm(elo); onDismiss() }) {
+            Button(
+                onClick = {
+                    if (usePresetUnlimited) {
+                        onConfirmPreset(StrengthTier.MAX)
+                    } else if (!isCustomSlider) {
+                        onConfirmPreset(selectedTier)
+                    } else {
+                        onConfirmCustomElo(sliderElo)
+                    }
+                    onDismiss()
+                },
+                modifier = Modifier.testTag("confirm_elo_btn")
+            ) {
                 Text("اعتماد")
             }
         }
@@ -236,14 +454,17 @@ fun EngineEloDialog(
 }
 
 private fun personalityIcon(p: EnginePersonality): ImageVector = when (p) {
-    EnginePersonality.TRADITIONAL -> Icons.Rounded.Balance
-    EnginePersonality.OPPORTUNITY_HUNTER -> Icons.Rounded.CrisisAlert
-    EnginePersonality.BRILLIANCY_CREATOR -> Icons.Rounded.AutoAwesome
-    EnginePersonality.LONG_GAME_MAKER -> Icons.Rounded.HourglassTop
+    EnginePersonality.CLASSIC -> Icons.Rounded.Balance
     EnginePersonality.FIERCE_WARRIOR -> Icons.Rounded.Bolt
     EnginePersonality.IRON_FORTRESS -> Icons.Rounded.Shield
     EnginePersonality.STRATEGIC_GENIUS -> Icons.Rounded.Hub
-    EnginePersonality.MISTAKE_CATCHER -> Icons.Rounded.Search
-    EnginePersonality.SACRIFICE_KING -> Icons.Rounded.LocalFireDepartment
     EnginePersonality.PATIENT_SERPENT -> Icons.Rounded.Timeline
+    EnginePersonality.ENDGAME_MASTER -> Icons.Rounded.Flag
+    EnginePersonality.SACRIFICE_KING -> Icons.Rounded.LocalFireDepartment
+    EnginePersonality.BRILLIANCY_CREATOR -> Icons.Rounded.AutoAwesome
+    EnginePersonality.MISTAKE_CATCHER -> Icons.Rounded.Search
+    EnginePersonality.TRICKY_GENIUS -> Icons.Rounded.Extension
+    EnginePersonality.OPPORTUNITY_HUNTER -> Icons.Rounded.CrisisAlert
+    EnginePersonality.LONG_GAME_MAKER -> Icons.Rounded.HourglassTop
+    EnginePersonality.MYSTERY_PLAYER -> Icons.Rounded.Casino
 }

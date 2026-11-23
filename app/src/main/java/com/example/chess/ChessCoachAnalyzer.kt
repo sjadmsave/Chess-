@@ -1,6 +1,7 @@
 package com.example.chess
 
-import kotlin.math.abs
+import java.security.MessageDigest
+import java.util.Locale
 import kotlin.math.roundToInt
 
 object ChessCoachAnalyzer {
@@ -15,13 +16,49 @@ object ChessCoachAnalyzer {
         val coachNoteAr: String
     )
 
+    /**
+     * Ruqaa Section 8.3 thresholds:
+     * < 50: جيدة, 50..99: عدم دقة, 100..199: خطأ, >= 200: خطأ كبير
+     */
+    fun classifyLossRuqaa(cpLoss: Int, isMateDelivered: Boolean = false): MoveQuality {
+        return when {
+            isMateDelivered -> MoveQuality.BRILLIANT
+            cpLoss < 15 -> MoveQuality.BEST
+            cpLoss < 30 -> MoveQuality.EXCELLENT
+            cpLoss < 50 -> MoveQuality.GOOD
+            cpLoss < 100 -> MoveQuality.INACCURACY
+            cpLoss < 200 -> MoveQuality.MISTAKE
+            else -> MoveQuality.BLUNDER
+        }
+    }
+
+    fun gradeLabelFromLoss(cpLoss: Int?): String {
+        if (cpLoss == null) return "تحليل غير مكتمل"
+        return when {
+            cpLoss < 50 -> "جيدة"
+            cpLoss < 100 -> "عدم دقة"
+            cpLoss < 200 -> "خطأ"
+            else -> "خطأ كبير"
+        }
+    }
+
+    fun computeReviewCacheKey(
+        engineId: String,
+        startFen: String,
+        uciMoves: List<String>
+    ): String {
+        val raw = "$engineId|$startFen|${uciMoves.joinToString(" ")}"
+        val digest = MessageDigest.getInstance("SHA-256").digest(raw.toByteArray(Charsets.UTF_8))
+        return digest.joinToString("") { "%02x".format(it) }
+    }
+
     fun analyzePlayedMove(
         stateBefore: ChessBoardState,
         playedMove: ChessMove,
         legalBefore: List<ChessMove>,
         depth: Int = 2
     ): MoveEvaluationResult {
-        val bestSearch = ChessEngine.evaluatePositionBestMove(stateBefore, depth = depth, timeLimitMs = 420L)
+        val bestSearch = ChessEngine.evaluatePositionBestMove(stateBefore, depth = depth, timeLimitMs = 220L)
         val bestMove = bestSearch.bestMove
         val bestEvalWhite = bestSearch.evalWhiteCp
         val bestMoveSan = bestMove?.let { stateBefore.toSan(it, legalBefore) } ?: ""
@@ -34,9 +71,9 @@ object ChessCoachAnalyzer {
 
         val moverIsWhite = stateBefore.turn == PieceColor.WHITE
         val cpLoss = if (moverIsWhite) {
-            (bestEvalWhite - playedEvalWhite).coerceAtLeast(0)
+            (bestEvalWhite - playedEvalWhite).coerceIn(0, 1000)
         } else {
-            (playedEvalWhite - bestEvalWhite).coerceAtLeast(0)
+            (playedEvalWhite - bestEvalWhite).coerceIn(0, 1000)
         }
 
         val afterState = stateBefore.copyWithMoveFast(playedMove)
@@ -47,12 +84,7 @@ object ChessCoachAnalyzer {
             isMateDelivered -> MoveQuality.BRILLIANT
             bestMove == playedMove && movedPiece != null && movedPiece.type != PieceType.PAWN &&
                 afterState.isSquareAttacked(playedMove.to, afterState.turn) && cpLoss == 0 -> MoveQuality.BRILLIANT
-            cpLoss <= 15 -> MoveQuality.BEST
-            cpLoss <= 45 -> MoveQuality.EXCELLENT
-            cpLoss <= 95 -> MoveQuality.GOOD
-            cpLoss <= 185 -> MoveQuality.INACCURACY
-            cpLoss <= 360 -> MoveQuality.MISTAKE
-            else -> MoveQuality.BLUNDER
+            else -> classifyLossRuqaa(cpLoss, isMateDelivered = false)
         }
 
         val note = buildArabicMoveNote(
@@ -76,33 +108,56 @@ object ChessCoachAnalyzer {
         )
     }
 
-    fun generateHint(state: ChessBoardState, precomputedBest: ChessMove? = null): MoveHint? {
+    /**
+     * Ruqaa Section 8.2 3-Stage Progressive Hint:
+     * Stage 1: General tactical/strategic concept
+     * Stage 2: Piece & square focus
+     * Stage 3: Full SAN + from -> to arrow
+     */
+    fun generateProgressiveHint(
+        state: ChessBoardState,
+        precomputedBest: ChessMove? = null
+    ): ProgressiveHint? {
         val legal = state.generateLegalMoves()
         if (legal.isEmpty()) return null
-        val best = precomputedBest ?: ChessEngine.evaluatePositionBestMove(state, depth = 4, timeLimitMs = 650L).bestMove ?: legal.first()
+        val best = precomputedBest
+            ?: ChessEngine.evaluatePositionBestMove(state, depth = 4, timeLimitMs = 320L).bestMove
+            ?: legal.first()
+
         val san = state.toSan(best, legal)
         val piece = state.pieceAt(best.from)
         val after = state.copyWithMoveFast(best)
+        val givesCheck = after.isInCheck(after.turn)
 
-        val reason = buildString {
-            when {
-                after.generateLegalMoves().isEmpty() && after.isInCheck(after.turn) ->
-                    append("هذه النقلة تنهي المباراة بـ كش مات مباشرة!")
-                best.isCastleKingside || best.isCastleQueenside ->
-                    append("التبييت يؤمّن ملكك ويُدخل القلعة في اللعب.")
-                best.promotion != null ->
-                    append("ترقية البيدق تمنحك تفوقاً حاسماً في القوة المادية.")
-                best.capturedPiece != null ->
-                    append("أسر ${best.capturedPiece.type.nameAr} يكسبك تفوقاً مادياً مهماً.")
-                after.isInCheck(after.turn) ->
-                    append("توجيه كش للملك يجبر الخصم على الدفاع ويكسبك المبادرة.")
-                best.to.row in 3..4 && best.to.col in 3..4 ->
-                    append("تحريك ${piece?.type?.nameAr ?: "القطعة"} إلى ${best.to.toAlgebraic()} يعزز السيطرة على وسط الرقعة.")
-                else ->
-                    append("نقل ${piece?.type?.nameAr ?: "القطعة"} إلى ${best.to.toAlgebraic()} يحسّن تنسيق قطعك وتوازن الموقف.")
-            }
+        val conceptAr = when {
+            givesCheck -> "ابحث عن نقلة تُعطي كشًا لملك الخصم."
+            best.promotion != null -> "لديك بيدق يستطيع الترقية. افحص نقلة ترقيته."
+            best.capturedPiece != null -> "افحص فرص الأخذ المتاحة، وتحقّق من الردود بعدها."
+            best.isCastleKingside || best.isCastleQueenside -> "فكّر في تأمين الملك بالتبييت."
+            else -> "ابحث عن تحسين تمركز إحدى قطعك؛ قارن المربعات المتاحة لها."
         }
-        return MoveHint(move = best, san = san, explanationAr = reason)
+
+        val pieceName = piece?.type?.nameAr ?: "القطعة"
+        val pieceHintAr = "ركّز على $pieceName الموجود في ${best.from.toAlgebraic()}."
+        val exactMoveAr = "$san (${best.from.toAlgebraic()} ← ${best.to.toAlgebraic()})"
+
+        return ProgressiveHint(
+            fen = state.toFen(),
+            move = best,
+            san = san,
+            conceptAr = conceptAr,
+            pieceHintAr = pieceHintAr,
+            exactMoveAr = exactMoveAr
+        )
+    }
+
+    fun generateHint(state: ChessBoardState, precomputedBest: ChessMove? = null): MoveHint? {
+        val prog = generateProgressiveHint(state, precomputedBest) ?: return null
+        return MoveHint(
+            move = prog.move,
+            san = prog.san,
+            explanationAr = "${prog.conceptAr} (${prog.exactMoveAr})"
+        )
     }
 
     private fun buildArabicMoveNote(
@@ -127,8 +182,8 @@ object ChessCoachAnalyzer {
                     "أسر دقيق لـ ${playedMove.capturedPiece.type.nameAr} يحسم التبادل لصالحك."
                 else -> "أفضل نقلة متاحة! حافظت على أعلى دقة في الموقف."
             }
-            MoveQuality.EXCELLENT -> "نقلة قوية ومتوازنة تدعم خطتك الاستراتيجية."
-            MoveQuality.GOOD -> "نقلة مقبولة، رغم وجود خيار أدق مثل ($bestMoveSan)."
+            MoveQuality.EXCELLENT -> "نقلة جيدة ومتوازنة تدعم خطتك الاستراتيجية."
+            MoveQuality.GOOD -> "نقلة جيدة (خسارة $cpLoss سنتيبيدق)، والخيار الأدق كان ($bestMoveSan)."
             MoveQuality.INACCURACY -> {
                 if (stateBefore.detectPhase() == GamePhase.OPENING && !playedMove.isCastleKingside &&
                     (if (mover == PieceColor.WHITE) stateBefore.castling.whiteKingside else stateBefore.castling.blackKingside) &&
@@ -136,7 +191,7 @@ object ChessCoachAnalyzer {
                 ) {
                     "عدم دقة: تأخرت في التبييت وحماية الملك. كان ($bestMoveSan) أفضل."
                 } else {
-                    "عدم دقة طفيفة (خسارة ${(cpLoss / 100.0).format1()} بيدق). النقلة ($bestMoveSan) كانت تمنحك موقفاً أقوى."
+                    "عدم دقة (خسارة ${(cpLoss / 100.0).format1()} بيدق). النقلة ($bestMoveSan) كانت تمنحك موقفاً أقوى."
                 }
             }
             MoveQuality.MISTAKE -> {
@@ -149,7 +204,7 @@ object ChessCoachAnalyzer {
                     bestMove?.capturedPiece != null ->
                         "أضعت فرصة أسر ${bestMove.capturedPiece.type.nameAr} عبر ($bestMoveSan)."
                     else ->
-                        "خطأ تكتيكي أفقدك جزءاً من الأفضلية. راجع النقلة البديلة ($bestMoveSan)."
+                        "خطأ أفقدك أفضلية ملموسة (خسارة ${(cpLoss / 100.0).format1()} بيدق). الأفضل كان ($bestMoveSan)."
                 }
             }
             MoveQuality.BLUNDER -> {
@@ -157,9 +212,9 @@ object ChessCoachAnalyzer {
                     afterState.isSquareAttacked(playedMove.to, opponent)
                 when {
                     leftHanging ->
-                        "خطأ فادح! تركت ${piece?.type?.nameAr} عرضة للأسر أو الهجوم المضاد. كان يجب لعب ($bestMoveSan)."
+                        "خطأ كبير! تركت ${piece?.type?.nameAr} عرضة للأسر أو الهجوم المضاد. كان يجب لعب ($bestMoveSan)."
                     else ->
-                        "خطأ فادح قلب تقييم المباراة! تأكد دائماً من فحص الكشّات والتهديدات قبل تحريك القطعة. الأفضل: ($bestMoveSan)."
+                        "خطأ كبير قلب تقييم المباراة! الأفضل كان ($bestMoveSan)."
                 }
             }
         }
@@ -215,25 +270,25 @@ object ChessCoachAnalyzer {
             strengths.add("اكتشاف $brilliants نقلة عبقرية أظهرت رؤية تكتيكية حادة.")
         }
         if (blunders == 0 && playerMoves.size >= 6) {
-            strengths.add("انضباط دفاعي رائع: أنهيت المباراة دون أي أخطاء فادحة (Blunders)!")
+            strengths.add("انضباط دفاعي رائع: أنهيت المباراة دون أي أخطاء كبيرة!")
         }
         if (strengths.isEmpty() && bestCount > 0) {
-            strengths.add("قدمت $bestCount نقلة ممتازة وتطويراً جيداً للقطع في بداية اللعب.")
+            strengths.add("قدمت $bestCount نقلة جيدة وتطويراً منظماً للقطع في بداية اللعب.")
         } else if (strengths.isEmpty()) {
             strengths.add("شجاعة في خوض التحدي واكتساب خبرة عملية أمام ${bot.nameAr}.")
         }
 
         if (blunders > 0) {
-            weaknesses.add("ارتكبت $blunders أخطاء فادحة أدت إلى خسارة قطع أو أفضلية حاسمة.")
+            weaknesses.add("ارتكبت $blunders أخطاء كبيرة أدت إلى خسارة قطع أو أفضلية حاسمة.")
             actionPlan.add("طبّق قاعدة (فحص التهديدات الثلاث): قبل كل نقلة افحص الكشّات، الأخذ، والقطع المهددة.")
         }
         if (mistakes >= 2) {
-            weaknesses.add("تكرار الأخطاء التكتيكية المتوسطة ($mistakes أخطاء) أثناء تبادل القطع.")
-            actionPlan.add("حلّ 5 ألغاز تكتيكية يومياً في قسم الألغاز لرفع سرعة التقاط الشوكة والتثبيت.")
+            weaknesses.add("تكرار الأخطاء التكتيكية ($mistakes أخطاء) أثناء تبادل القطع.")
+            actionPlan.add("حلّ 5 ألغاز تكتيكية يومياً لرفع سرعة التقاط الشوكة والتثبيت.")
         }
         if (openingAcc < 72 && playerMoves.any { it.phase == GamePhase.OPENING }) {
             weaknesses.add("انخفاض الدقة في مرحلة الافتتاح (${openingAcc}%) مما صعّب الموقف مبكراً.")
-            actionPlan.add("التزم بقاعدة الافتتاح الذهبية: السيطرة على الوسط، إخراج الأحصنة والأفيال، والتبييت خلال أول 8 نقلات.")
+            actionPlan.add("التزم بقاعدة الافتتاح: السيطرة على الوسط، إخراج الأحصنة والأفيال، والتبييت مبكراً.")
         }
         if (midAcc < 72 && playerMoves.any { it.phase == GamePhase.MIDDLEGAME }) {
             weaknesses.add("تذبذب الحسابات في وسط اللعب (${midAcc}%) عند تعقد التفاعلات بين القطع.")
@@ -248,7 +303,7 @@ object ChessCoachAnalyzer {
             weaknesses.add("بعض التنازلات الطفيفة فقط التي يمكن صقلها بمواجهة مستوى أعلى.")
         }
         if (actionPlan.isEmpty()) {
-            actionPlan.add("مستواك متقدم! جرّب تحدي مستوى أعلى أو التحدي التكيفي لصقل الدقة أكثر.")
+            actionPlan.add("مستواك متقدم! جرّب تحدي مستوى أعلى أو شخصيات محرك متقدمة.")
         }
 
         val diagnosis = when {
@@ -256,16 +311,14 @@ object ChessCoachAnalyzer {
             openingAcc < midAcc - 12 -> "التشخيص الرئيسي: تبدأ المباراة بفقدان تمبو في الافتتاح ثم تحاول التعويض في وسط اللعب."
             playerMoves.any { it.phase == GamePhase.ENDGAME } && endAcc < midAcc - 10 ->
                 "التشخيص الرئيسي: تلعب الافتتاح والوسط بقوة، لكن الدقة تنخفض عند الانتقال لنهاية المباراة."
-            acpl <= 35 -> "التشخيص الرئيسي: أسلوب لعب متوازن وعالي الانضباط؛ ركّز على الخطط العميقة لانتزاع الفوز من الأساتذة."
+            acpl <= 35 -> "التشخيص الرئيسي: أسلوب لعب متوازن وعالي الانضباط؛ ركّز على الخطط العميقة."
             else -> "التشخيص الرئيسي: أساسك جيد وتحتاج فقط لتثبيت الحسابات التكتيكية لخطوتين للأمام."
         }
 
-        // Compute ELO delta
         val actualScore = when {
             (result == GameResult.WHITE_WINS_CHECKMATE || result == GameResult.BLACK_RESIGNED || result == GameResult.BLACK_TIMEOUT) && playerColor == PieceColor.WHITE -> 1.0
             (result == GameResult.BLACK_WINS_CHECKMATE || result == GameResult.WHITE_RESIGNED || result == GameResult.WHITE_TIMEOUT) && playerColor == PieceColor.BLACK -> 1.0
-            result == GameResult.DRAW_STALEMATE || result == GameResult.DRAW_INSUFFICIENT_MATERIAL ||
-                result == GameResult.DRAW_FIFTY_MOVE || result == GameResult.DRAW_REPETITION -> 0.5
+            result.isDraw -> 0.5
             else -> 0.0
         }
         val expected = 1.0 / (1.0 + Math.pow(10.0, (bot.elo - currentPlayerElo) / 400.0))
@@ -296,5 +349,5 @@ object ChessCoachAnalyzer {
         return acc.coerceIn(15, 99)
     }
 
-    private fun Double.format1(): String = String.format(java.util.Locale.US, "%.1f", this)
+    private fun Double.format1(): String = String.format(Locale.US, "%.1f", this)
 }

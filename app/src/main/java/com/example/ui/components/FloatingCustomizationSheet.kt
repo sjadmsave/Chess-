@@ -9,7 +9,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -44,7 +44,7 @@ import com.example.chess.FloatingFrameShape
 import com.example.chess.PieceColor
 import com.example.chess.PieceType
 import com.example.data.UserPreferences
-import com.example.ui.theme.MonoFontFamily
+import com.example.ui.theme.formatArabicNumber
 
 @Composable
 fun FloatingCustomizationSheetContent(
@@ -57,9 +57,9 @@ fun FloatingCustomizationSheetContent(
     ) -> Unit,
     onDismiss: () -> Unit
 ) {
-    var widthDp by remember { mutableIntStateOf(prefs.floatingWidthDp) }
+    var widthDp by remember { mutableIntStateOf(prefs.floatingWidthDp.coerceIn(180, 560)) }
     var frameShape by remember { mutableStateOf(prefs.floatingFrameShape) }
-    var opacityPercent by remember { mutableIntStateOf(prefs.floatingOpacityPercent) }
+    var opacityPercent by remember { mutableIntStateOf(prefs.floatingOpacityPercent.coerceIn(65, 100)) }
     var bubbleSize by remember { mutableStateOf(prefs.floatingBubbleSize) }
 
     val previewBoard = remember {
@@ -100,14 +100,14 @@ fun FloatingCustomizationSheetContent(
                             .padding(vertical = 12.dp),
                         contentAlignment = Alignment.Center
                     ) {
-                        val previewFraction = ((widthDp - 160) / 160f).coerceIn(0f, 1f)
-                        val previewBoxSize = (118 + (previewFraction * 44)).dp
+                        val previewFraction = ((widthDp - 180) / 380f).coerceIn(0f, 1f)
+                        val previewBoxSize = (118 + (previewFraction * 66)).dp
                         Surface(
                             modifier = Modifier
                                 .size(width = previewBoxSize, height = previewBoxSize + 24.dp)
                                 .alpha(opacityPercent / 100f),
                             shape = RoundedCornerShape(frameShape.cornerDp.dp),
-                            color = Color.White,
+                            color = MaterialTheme.colorScheme.surface,
                             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
                             shadowElevation = 6.dp
                         ) {
@@ -122,13 +122,13 @@ fun FloatingCustomizationSheetContent(
                                     listOf("•••", "✎", "↩", "⇅", "⋮⋮").forEach { sym ->
                                         Surface(
                                             shape = RoundedCornerShape(6.dp),
-                                            color = Color(0xFFF1F5F9),
-                                            border = BorderStroke(0.5.dp, Color(0xFFCBD5E1))
+                                            color = MaterialTheme.colorScheme.surfaceVariant,
+                                            border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outline)
                                         ) {
                                             Text(
                                                 text = sym,
                                                 fontSize = 9.sp,
-                                                color = Color(0xFF0F172A),
+                                                color = MaterialTheme.colorScheme.onSurface,
                                                 modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
                                             )
                                         }
@@ -155,26 +155,25 @@ fun FloatingCustomizationSheetContent(
             }
         }
 
-        // Width Slider + Presets
+        // Width Slider (180..560 dp) + Presets
         item {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(
-                    text = "عرض النافذة • $widthDp",
-                    fontFamily = MonoFontFamily,
+                    text = "عرض النافذة • ${formatArabicNumber(widthDp)} dp",
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Bold
                 )
                 Slider(
                     value = widthDp.toFloat(),
-                    onValueChange = { widthDp = it.toInt() },
-                    valueRange = 160f..320f
+                    onValueChange = { widthDp = it.toInt().coerceIn(180, 560) },
+                    valueRange = 180f..560f
                 )
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    listOf("صغير" to 189, "متوسط" to 235, "كبير" to 290).forEach { (label, w) ->
-                        val selected = kotlin.math.abs(widthDp - w) <= 18
+                    listOf("صغير" to 210, "متوسط" to 270, "كبير" to 380, "عريض" to 480).forEach { (label, w) ->
+                        val selected = kotlin.math.abs(widthDp - w) <= 28
                         SelectablePillButton(
                             label = label,
                             selected = selected,
@@ -184,14 +183,14 @@ fun FloatingCustomizationSheetContent(
                     }
                 }
                 Text(
-                    text = "يُحفظ العرض المختار وتلائم النافذة المساحة المتاحة.",
+                    text = "العرض المدعوم من ${formatArabicNumber(180)} إلى ${formatArabicNumber(560)} dp ويمكن تغييره بالسحب من مقبض الزاوية.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }
 
-        // Frame Shape
+        // Frame Shape (مستديرة 12dp، مدمجة 7dp، مربعة 0dp)
         item {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("شكل الإطار", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
@@ -211,24 +210,23 @@ fun FloatingCustomizationSheetContent(
             }
         }
 
-        // Opacity Slider
+        // Opacity Slider (65%..100%)
         item {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(
-                    text = "عتامة الإطار • $opacityPercent%",
-                    fontFamily = MonoFontFamily,
+                    text = "عتامة الإطار • ${formatArabicNumber(opacityPercent)}٪",
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Bold
                 )
                 Slider(
                     value = opacityPercent.toFloat(),
-                    onValueChange = { opacityPercent = it.toInt() },
-                    valueRange = 35f..100f
+                    onValueChange = { opacityPercent = it.toInt().coerceIn(65, 100) },
+                    valueRange = 65f..100f
                 )
             }
         }
 
-        // Bubble Size + Live Bubble Icon
+        // Bubble Size + Live Bubble Icon (44 / 52 / 64 dp)
         item {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(
@@ -236,10 +234,14 @@ fun FloatingCustomizationSheetContent(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text("حجم الفقاعة", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                    Text(
+                        text = "حجم الفقاعة (${formatArabicNumber(bubbleSize.sizeDp)} dp)",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold
+                    )
                     Box(
                         modifier = Modifier
-                            .size((bubbleSize.sizeDp * 0.65f).dp)
+                            .size((bubbleSize.sizeDp * 0.72f).dp)
                             .clip(CircleShape)
                             .background(MaterialTheme.colorScheme.primary)
                             .border(2.dp, Color.White, CircleShape),
@@ -247,7 +249,7 @@ fun FloatingCustomizationSheetContent(
                     ) {
                         ChessPieceGraphic(
                             piece = ChessPiece(PieceType.KNIGHT, PieceColor.WHITE),
-                            pieceSize = (bubbleSize.sizeDp * 0.42f).dp
+                            pieceSize = (bubbleSize.sizeDp * 0.45f).dp
                         )
                     }
                 }
@@ -267,7 +269,7 @@ fun FloatingCustomizationSheetContent(
             }
         }
 
-        // Footer: Default / Cancel / Save
+        // Footer: Default (Ruqaa Section 11/13) / Cancel / Save
         item {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -276,16 +278,19 @@ fun FloatingCustomizationSheetContent(
             ) {
                 TextButton(
                     onClick = {
-                        widthDp = 220
-                        frameShape = FloatingFrameShape.COMPACT
-                        opacityPercent = 85
-                        bubbleSize = FloatingBubbleSize.SMALL
+                        widthDp = 270
+                        frameShape = FloatingFrameShape.ROUNDED
+                        opacityPercent = 100
+                        bubbleSize = FloatingBubbleSize.MEDIUM
                     }
                 ) {
                     Text("افتراضي")
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = onDismiss) {
+                    OutlinedButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.heightIn(min = 48.dp)
+                    ) {
                         Text("إلغاء")
                     }
                     Button(
@@ -293,7 +298,9 @@ fun FloatingCustomizationSheetContent(
                             onSave(widthDp, frameShape, opacityPercent, bubbleSize)
                             onDismiss()
                         },
-                        modifier = Modifier.testTag("save_floating_custom_btn")
+                        modifier = Modifier
+                            .heightIn(min = 48.dp)
+                            .testTag("save_floating_custom_btn")
                     ) {
                         Text("حفظ")
                     }
@@ -312,7 +319,7 @@ private fun SelectablePillButton(
 ) {
     Surface(
         onClick = onClick,
-        modifier = modifier,
+        modifier = modifier.heightIn(min = 48.dp),
         shape = RoundedCornerShape(16.dp),
         color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface,
         border = BorderStroke(
@@ -328,7 +335,7 @@ private fun SelectablePillButton(
         ) {
             Text(
                 text = label,
-                color = if (selected) Color.White else MaterialTheme.colorScheme.onSurface,
+                color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
             )

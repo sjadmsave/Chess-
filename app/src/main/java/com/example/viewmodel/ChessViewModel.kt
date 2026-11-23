@@ -1,9 +1,12 @@
 package com.example.viewmodel
 
 import android.app.Application
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.audio.ChessHapticEvent
 import com.example.audio.ChessSound
+import com.example.audio.HapticsManager
 import com.example.audio.SoundManager
 import com.example.chess.BoardMaterial
 import com.example.chess.BoardTheme
@@ -16,21 +19,32 @@ import com.example.chess.EngineBackendPreference
 import com.example.chess.EnginePersonality
 import com.example.chess.FloatingBubbleSize
 import com.example.chess.FloatingFrameShape
+import com.example.chess.GameMode
 import com.example.chess.GameResult
+import com.example.chess.HintStage
 import com.example.chess.MoveHint
 import com.example.chess.MoveQuality
+import com.example.chess.MultiPvLine
 import com.example.chess.ParsedGameData
+import com.example.chess.PersonalityRisk
 import com.example.chess.PgnFenCodec
 import com.example.chess.PieceColor
 import com.example.chess.PieceStyle
 import com.example.chess.PieceType
 import com.example.chess.PostGameReport
+import com.example.chess.ProgressiveHint
 import com.example.chess.PuzzleRepository
 import com.example.chess.RecordedMove
+import com.example.chess.SoundProfile
 import com.example.chess.Square
 import com.example.chess.StockfishProbeResult
 import com.example.chess.StockfishUciEngine
+import com.example.chess.StrengthTier
+import com.example.chess.SyzygyImportReport
+import com.example.chess.SyzygyManager
+import com.example.chess.SyzygyTableEntry
 import com.example.chess.TimeControl
+import com.example.chess.VibrationStyle
 import com.example.data.AchievementDef
 import com.example.data.AchievementEntity
 import com.example.data.ChessDatabase
@@ -40,6 +54,7 @@ import com.example.data.PeriodicReport
 import com.example.data.PuzzleRecordEntity
 import com.example.data.RatingPointEntity
 import com.example.data.ReportPeriod
+import com.example.data.RuqaaEngineStatsSummary
 import com.example.data.SavedGameEntity
 import com.example.data.UserPreferences
 import com.example.data.UserPreferencesRepository
@@ -57,15 +72,24 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.UUID
 
 data class ActiveMatchUiState(
+    val sessionUuid: String = UUID.randomUUID().toString(),
     val savedGameId: Long? = null,
+    val gameMode: GameMode = GameMode.VS_ENGINE,
     val bot: BotPersona = BotPersona.FISCHER,
     val usingCustomEngine: Boolean = true,
-    val customEngineElo: Int = 1800,
-    val customPersonality: EnginePersonality = EnginePersonality.OPPORTUNITY_HUNTER,
+    val customEngineElo: Int = 700,
+    val customPersonality: EnginePersonality = EnginePersonality.CLASSIC,
+    val personalityIntensity: Int = 50,
+    val personalityRisk: PersonalityRisk = PersonalityRisk.BALANCED,
     val humanStyle: Boolean = true,
     val customStartFen: String? = null,
+    val editedPosition: Boolean = false,
+    val strengthMixed: Boolean = false,
+    val hintsUsed: Int = 0,
+    val assisted: Boolean = false,
     val playerColor: PieceColor = PieceColor.WHITE,
     val boardState: ChessBoardState = ChessBoardState.initial(),
     val legalMoves: List<ChessMove> = ChessBoardState.initial().generateLegalMoves(),
@@ -75,13 +99,17 @@ data class ActiveMatchUiState(
     val recordedMoves: List<RecordedMove> = emptyList(),
     val evalWhiteCp: Int = 15,
     val gameResult: GameResult = GameResult.ONGOING,
+    val claimableDrawReason: String? = null,
     val isBotThinking: Boolean = false,
     val isAnalyzingHint: Boolean = false,
     val currentHint: MoveHint? = null,
-    val botChatMessageAr: String = "مخصص • نحو 1800 إيلو • صائد الفرص",
+    val progressiveHint: ProgressiveHint? = null,
+    val currentHintStage: HintStage? = null,
+    val hintCacheByFen: Map<String, ProgressiveHint> = emptyMap(),
+    val botChatMessageAr: String = "مخصص • ٧٠٠ إيلو • كلاسيكي",
     val lastMoveQualityBadge: Pair<MoveQuality, String>? = null,
     val flippedBoard: Boolean = false,
-    val reviewIndex: Int? = null, // null = live board; >= 0 = inspecting historical move
+    val reviewIndex: Int? = null,
     val postGameReport: PostGameReport? = null,
     val newlyUnlockedAchievements: List<AchievementDef> = emptyList(),
     val showPostGameSheet: Boolean = false,
@@ -89,7 +117,16 @@ data class ActiveMatchUiState(
     val isAdaptiveMatch: Boolean = false,
     val timeControl: TimeControl = TimeControl.UNLIMITED,
     val whiteTimeSec: Long = TimeControl.UNLIMITED.initialSeconds,
-    val blackTimeSec: Long = TimeControl.UNLIMITED.initialSeconds
+    val blackTimeSec: Long = TimeControl.UNLIMITED.initialSeconds,
+    // Pausable full-game review
+    val isFullReviewRunning: Boolean = false,
+    val isFullReviewPaused: Boolean = false,
+    val fullReviewNextIndex: Int = 0,
+    val fullReviewCompleted: Boolean = false,
+    val reviewCacheKey: String = "",
+    // MultiPV-3 Analysis
+    val isAnalyzingMultiPv: Boolean = false,
+    val multiPvLines: List<MultiPvLine> = emptyList()
 ) {
     val openingNameAr: String
         get() = ChessBoardState.recognizeOpeningArabic(recordedMoves.map { it.move.toUci() })
@@ -111,13 +148,20 @@ data class ActiveMatchUiState(
     val isReviewingPastMove: Boolean get() = reviewIndex != null
 
     val effectiveBotId: String
-        get() = if (usingCustomEngine) "custom:${customPersonality.id}:$customEngineElo" else bot.id
+        get() = when (gameMode) {
+            GameMode.LOCAL_TWO_PLAYER -> "local_2p"
+            GameMode.VS_ENGINE -> "custom:${customPersonality.id}:$customEngineElo"
+            GameMode.VS_BOT_PERSONA -> bot.id
+        }
 
     val matchSubtitleAr: String
-        get() = if (usingCustomEngine) {
-            "مخصص • نحو $customEngineElo إيلو • ${customPersonality.nameAr}"
-        } else {
-            "${bot.nameAr} • ${bot.elo} ELO"
+        get() = when (gameMode) {
+            GameMode.LOCAL_TWO_PLAYER -> "لاعبان محليان على جهاز واحد"
+            GameMode.VS_ENGINE -> {
+                val eloStr = if (customEngineElo <= 0) "بلا حد (أقصى قوة)" else "نحو $customEngineElo إيلو"
+                "ضد المحرك • $eloStr • ${customPersonality.nameAr}"
+            }
+            GameMode.VS_BOT_PERSONA -> "${bot.nameAr} • ${bot.elo} ELO"
         }
 }
 
@@ -144,6 +188,7 @@ class ChessViewModel(application: Application) : AndroidViewModel(application) {
     private val prefsRepo = UserPreferencesRepository(application)
     private val repository = ChessRepository(db, prefsRepo)
     private val soundManager = SoundManager()
+    private val hapticsManager = HapticsManager(application)
 
     val preferences: StateFlow<UserPreferences> = prefsRepo.preferencesFlow
         .stateIn(viewModelScope, SharingStarted.Eagerly, UserPreferences())
@@ -169,6 +214,13 @@ class ChessViewModel(application: Application) : AndroidViewModel(application) {
     private val _selectedPeriod = MutableStateFlow(ReportPeriod.ALL_TIME)
     val selectedPeriod: StateFlow<ReportPeriod> = _selectedPeriod.asStateFlow()
 
+    private val _unassistedStatsOnly = MutableStateFlow(false)
+    val unassistedStatsOnly: StateFlow<Boolean> = _unassistedStatsOnly.asStateFlow()
+
+    val engineStatsSummary: StateFlow<RuqaaEngineStatsSummary> = combine(allGames, _unassistedStatsOnly) { games, filter ->
+        repository.buildEngineStatsSummary(games, filter)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), RuqaaEngineStatsSummary())
+
     val periodicReport: StateFlow<PeriodicReport> = combine(ratingHistory, _selectedPeriod) { pts, period ->
         repository.buildPeriodicReport(pts, period)
     }.stateIn(
@@ -189,19 +241,36 @@ class ChessViewModel(application: Application) : AndroidViewModel(application) {
     private val _lastEngineTelemetry = MutableStateFlow("")
     val lastEngineTelemetry: StateFlow<String> = _lastEngineTelemetry.asStateFlow()
 
+    private val _syzygyTables = MutableStateFlow<List<SyzygyTableEntry>>(emptyList())
+    val syzygyTables: StateFlow<List<SyzygyTableEntry>> = _syzygyTables.asStateFlow()
+
+    private val _syzygyStatusMessage = MutableStateFlow<String?>(null)
+    val syzygyStatusMessage: StateFlow<String?> = _syzygyStatusMessage.asStateFlow()
+
     private var botThinkingJob: Job? = null
     private var clockJob: Job? = null
+    private var fullReviewJob: Job? = null
+    private var multiPvJob: Job? = null
 
     init {
         viewModelScope.launch {
             preferences.collect { pref ->
                 soundManager.enabled = pref.soundEnabled
+                soundManager.profile = pref.soundProfile
+                soundManager.volumePercent = pref.soundVolume
+                hapticsManager.enabled = pref.hapticsEnabled
+                hapticsManager.style = pref.vibrationStyle
             }
         }
+        refreshSyzygyTables()
     }
 
     fun selectReportPeriod(period: ReportPeriod) {
         _selectedPeriod.value = period
+    }
+
+    fun setUnassistedStatsOnly(only: Boolean) {
+        _unassistedStatsOnly.value = only
     }
 
     // --- Settings Actions ---
@@ -209,7 +278,10 @@ class ChessViewModel(application: Application) : AndroidViewModel(application) {
     fun setBoardTheme(theme: BoardTheme) = viewModelScope.launch { prefsRepo.setBoardTheme(theme) }
     fun setPieceStyle(style: PieceStyle) = viewModelScope.launch { prefsRepo.setPieceStyle(style) }
     fun setSoundEnabled(enabled: Boolean) = viewModelScope.launch { prefsRepo.setSoundEnabled(enabled) }
+    fun setSoundProfile(profile: SoundProfile) = viewModelScope.launch { prefsRepo.setSoundProfile(profile) }
+    fun setSoundVolume(vol: Int) = viewModelScope.launch { prefsRepo.setSoundVolume(vol) }
     fun setHapticsEnabled(enabled: Boolean) = viewModelScope.launch { prefsRepo.setHapticsEnabled(enabled) }
+    fun setVibrationStyle(style: VibrationStyle) = viewModelScope.launch { prefsRepo.setVibrationStyle(style) }
     fun setShowEvalBar(show: Boolean) = viewModelScope.launch { prefsRepo.setShowEvalBar(show) }
     fun setAdaptiveMode(enabled: Boolean) = viewModelScope.launch { prefsRepo.setAdaptiveMode(enabled) }
     fun setSelectedBotId(botId: String) = viewModelScope.launch { prefsRepo.setSelectedBotId(botId) }
@@ -236,10 +308,30 @@ class ChessViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
-    fun setCustomEngineElo(elo: Int) = viewModelScope.launch {
-        prefsRepo.setCustomEngineElo(elo)
+    fun setStrengthTier(tier: StrengthTier) = viewModelScope.launch {
+        prefsRepo.setStrengthTier(tier)
         _matchState.update { st ->
-            if (st.usingCustomEngine) st.copy(customEngineElo = elo) else st
+            if (st.usingCustomEngine) {
+                val mixed = st.recordedMoves.isNotEmpty() && st.gameResult.isOngoing
+                st.copy(
+                    customEngineElo = tier.targetElo,
+                    strengthMixed = st.strengthMixed || mixed
+                )
+            } else st
+        }
+    }
+
+    fun setCustomEngineElo(elo: Int) = viewModelScope.launch {
+        val snapped = StrengthTier.snapElo(elo)
+        prefsRepo.setCustomEngineElo(snapped)
+        _matchState.update { st ->
+            if (st.usingCustomEngine) {
+                val mixed = st.recordedMoves.isNotEmpty() && st.gameResult.isOngoing
+                st.copy(
+                    customEngineElo = snapped,
+                    strengthMixed = st.strengthMixed || mixed
+                )
+            } else st
         }
     }
 
@@ -253,7 +345,27 @@ class ChessViewModel(application: Application) : AndroidViewModel(application) {
     fun setEnginePersonality(personality: EnginePersonality) = viewModelScope.launch {
         prefsRepo.setEnginePersonality(personality)
         _matchState.update { st ->
-            if (st.usingCustomEngine) st.copy(customPersonality = personality) else st
+            if (st.usingCustomEngine) {
+                val mixed = st.recordedMoves.isNotEmpty() && st.gameResult.isOngoing
+                st.copy(
+                    customPersonality = personality,
+                    strengthMixed = st.strengthMixed || mixed
+                )
+            } else st
+        }
+    }
+
+    fun setPersonalityIntensity(intensity: Int) = viewModelScope.launch {
+        prefsRepo.setPersonalityIntensity(intensity)
+        _matchState.update { st ->
+            if (st.usingCustomEngine) st.copy(personalityIntensity = intensity.coerceIn(0, 100)) else st
+        }
+    }
+
+    fun setPersonalityRisk(risk: PersonalityRisk) = viewModelScope.launch {
+        prefsRepo.setPersonalityRisk(risk)
+        _matchState.update { st ->
+            if (st.usingCustomEngine) st.copy(personalityRisk = risk) else st
         }
     }
 
@@ -269,6 +381,44 @@ class ChessViewModel(application: Application) : AndroidViewModel(application) {
     fun refreshStockfishProbe() {
         viewModelScope.launch(Dispatchers.IO) {
             _stockfishStatus.value = StockfishUciEngine.probeAvailableEngines(getApplication())
+        }
+    }
+
+    fun refreshSyzygyTables() {
+        viewModelScope.launch(Dispatchers.IO) {
+            _syzygyTables.value = SyzygyManager.listTables(getApplication())
+        }
+    }
+
+    fun importSyzygyFiles(uris: List<Uri>) {
+        if (uris.isEmpty()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            val report: SyzygyImportReport = SyzygyManager.importFromUris(getApplication(), uris)
+            StockfishUciEngine.resetSyzygyFallbackFlag()
+            _syzygyTables.value = SyzygyManager.listTables(getApplication())
+            _syzygyStatusMessage.value = buildString {
+                if (report.importedCount > 0) {
+                    append("تم استيراد ${report.importedCount} جدول بنجاح.")
+                }
+                if (report.skippedReasonsAr.isNotEmpty()) {
+                    if (isNotEmpty()) append(" ")
+                    append(report.skippedReasonsAr.first())
+                }
+            }.ifBlank { "لم يتم استيراد أي ملف." }
+        }
+    }
+
+    fun deleteSyzygyTable(fileName: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            SyzygyManager.deleteTable(getApplication(), fileName)
+            _syzygyTables.value = SyzygyManager.listTables(getApplication())
+        }
+    }
+
+    fun clearSyzygyTables() {
+        viewModelScope.launch(Dispatchers.IO) {
+            SyzygyManager.clearAll(getApplication())
+            _syzygyTables.value = emptyList()
         }
     }
 
@@ -317,13 +467,14 @@ class ChessViewModel(application: Application) : AndroidViewModel(application) {
         bot: BotPersona,
         playerColor: PieceColor,
         adaptiveMode: Boolean = preferences.value.adaptiveMode,
-        timeControl: TimeControl = TimeControl.RAPID_10
+        timeControl: TimeControl = TimeControl.MIN_10
     ) {
-        botThinkingJob?.cancel()
-        clockJob?.cancel()
+        cancelBackgroundJobs()
         val initial = ChessBoardState.initial()
         _matchState.value = ActiveMatchUiState(
+            sessionUuid = UUID.randomUUID().toString(),
             savedGameId = null,
+            gameMode = GameMode.VS_BOT_PERSONA,
             bot = bot,
             usingCustomEngine = false,
             customEngineElo = bot.elo,
@@ -347,71 +498,138 @@ class ChessViewModel(application: Application) : AndroidViewModel(application) {
 
     fun startCustomEngineMatch(
         playerColor: PieceColor,
-        targetElo: Int = preferences.value.customEngineElo,
+        targetElo: Int = preferences.value.effectiveEngineElo,
         personality: EnginePersonality = preferences.value.enginePersonality,
         humanStyle: Boolean = preferences.value.humanStyleEnabled,
         timeControl: TimeControl = TimeControl.UNLIMITED,
-        startFen: String? = null
+        startFen: String? = null,
+        edited: Boolean = false
     ) {
-        botThinkingJob?.cancel()
-        clockJob?.cancel()
+        cancelBackgroundJobs()
         val initialBoard = startFen?.let { ChessBoardState.fromFen(it) } ?: ChessBoardState.initial()
         val legal = initialBoard.generateLegalMoves()
         val result = initialBoard.evaluateGameResult(legal)
+        val pref = preferences.value
+        val eloLabel = if (targetElo <= 0) "بلا حد" else "$targetElo إيلو"
         _matchState.value = ActiveMatchUiState(
+            sessionUuid = UUID.randomUUID().toString(),
             savedGameId = null,
+            gameMode = GameMode.VS_ENGINE,
             bot = BotPersona.FISCHER,
             usingCustomEngine = true,
             customEngineElo = targetElo,
             customPersonality = personality,
+            personalityIntensity = pref.personalityIntensity,
+            personalityRisk = pref.personalityRisk,
             humanStyle = humanStyle,
             customStartFen = startFen,
+            editedPosition = edited || (startFen != null && startFen != ChessBoardState.INITIAL_FEN),
             playerColor = playerColor,
             boardState = initialBoard,
             legalMoves = legal,
             gameResult = result,
+            claimableDrawReason = initialBoard.canClaimDraw(),
             flippedBoard = playerColor == PieceColor.BLACK,
-            botChatMessageAr = "${personality.nameAr} • نحو $targetElo إيلو",
+            botChatMessageAr = "${personality.nameAr} • $eloLabel",
             isAdaptiveMatch = false,
             timeControl = timeControl,
             whiteTimeSec = timeControl.initialSeconds,
             blackTimeSec = timeControl.initialSeconds
         )
-        viewModelScope.launch {
-            prefsRepo.setCustomEngineElo(targetElo)
-            prefsRepo.setEnginePersonality(personality)
-            prefsRepo.setHumanStyleEnabled(humanStyle)
-        }
         startClockTickerIfTimed()
         if (result == GameResult.ONGOING && initialBoard.turn != playerColor) {
             triggerBotMove()
         }
     }
 
-    fun importParsedGame(parsed: ParsedGameData, playerColor: PieceColor = PieceColor.WHITE) {
-        botThinkingJob?.cancel()
-        clockJob?.cancel()
+    fun startLocalTwoPlayerMatch(
+        timeControl: TimeControl = TimeControl.UNLIMITED,
+        startFen: String? = null,
+        edited: Boolean = false
+    ) {
+        cancelBackgroundJobs()
+        val initialBoard = startFen?.let { ChessBoardState.fromFen(it) } ?: ChessBoardState.initial()
+        val legal = initialBoard.generateLegalMoves()
+        val result = initialBoard.evaluateGameResult(legal)
+        _matchState.value = ActiveMatchUiState(
+            sessionUuid = UUID.randomUUID().toString(),
+            savedGameId = null,
+            gameMode = GameMode.LOCAL_TWO_PLAYER,
+            usingCustomEngine = false,
+            customStartFen = startFen,
+            editedPosition = edited || (startFen != null && startFen != ChessBoardState.INITIAL_FEN),
+            playerColor = PieceColor.WHITE,
+            boardState = initialBoard,
+            legalMoves = legal,
+            gameResult = result,
+            claimableDrawReason = initialBoard.canClaimDraw(),
+            flippedBoard = false,
+            botChatMessageAr = "مباراة محلية • دور الأبيض",
+            timeControl = timeControl,
+            whiteTimeSec = timeControl.initialSeconds,
+            blackTimeSec = timeControl.initialSeconds
+        )
+        startClockTickerIfTimed()
+    }
+
+    fun importParsedGame(
+        parsed: ParsedGameData,
+        playerColor: PieceColor = PieceColor.WHITE,
+        playFromPosition: Boolean = false
+    ) {
+        cancelBackgroundJobs()
         val pref = preferences.value
         val legal = parsed.finalBoard.generateLegalMoves()
         val result = parsed.finalBoard.evaluateGameResult(legal)
         _matchState.value = ActiveMatchUiState(
+            sessionUuid = UUID.randomUUID().toString(),
             savedGameId = null,
+            gameMode = GameMode.VS_ENGINE,
             usingCustomEngine = true,
-            customEngineElo = pref.customEngineElo,
+            customEngineElo = pref.effectiveEngineElo,
             customPersonality = pref.enginePersonality,
+            personalityIntensity = pref.personalityIntensity,
+            personalityRisk = pref.personalityRisk,
             humanStyle = pref.humanStyleEnabled,
             customStartFen = parsed.startFen.takeIf { it != ChessBoardState.INITIAL_FEN },
+            editedPosition = parsed.startFen != ChessBoardState.INITIAL_FEN,
             playerColor = playerColor,
             boardState = parsed.finalBoard,
             legalMoves = legal,
             recordedMoves = parsed.moves,
             evalWhiteCp = parsed.moves.lastOrNull()?.evalWhiteCp ?: 0,
             gameResult = result,
+            claimableDrawReason = parsed.finalBoard.canClaimDraw(),
             flippedBoard = playerColor == PieceColor.BLACK,
             botChatMessageAr = "تم استيراد: ${parsed.openingNameAr}",
-            reviewIndex = if (parsed.moves.isNotEmpty()) parsed.moves.lastIndex else null,
+            reviewIndex = if (!playFromPosition && parsed.moves.isNotEmpty()) parsed.moves.lastIndex else null,
             timeControl = TimeControl.UNLIMITED
         )
+        if (playFromPosition && result == GameResult.ONGOING && parsed.finalBoard.turn != playerColor) {
+            triggerBotMove()
+        }
+    }
+
+    fun exportCurrentGamePgn(): String {
+        val st = _matchState.value
+        val whiteName = when {
+            st.gameMode == GameMode.LOCAL_TWO_PLAYER -> "الأبيض (محلي)"
+            st.playerColor == PieceColor.WHITE -> "اللاعب"
+            else -> st.matchSubtitleAr
+        }
+        val blackName = when {
+            st.gameMode == GameMode.LOCAL_TWO_PLAYER -> "الأسود (محلي)"
+            st.playerColor == PieceColor.BLACK -> "اللاعب"
+            else -> st.matchSubtitleAr
+        }
+        return PgnFenCodec.exportPgn(st.recordedMoves, whiteName = whiteName, blackName = blackName)
+    }
+
+    private fun cancelBackgroundJobs() {
+        botThinkingJob?.cancel()
+        clockJob?.cancel()
+        fullReviewJob?.cancel()
+        multiPvJob?.cancel()
     }
 
     private fun startClockTickerIfTimed() {
@@ -423,21 +641,23 @@ class ChessViewModel(application: Application) : AndroidViewModel(application) {
                 delay(1000L)
                 val st = _matchState.value
                 if (st.gameResult != GameResult.ONGOING) break
-                if (st.recordedMoves.isEmpty()) continue // Clock starts after first move
+                if (st.recordedMoves.isEmpty()) continue
                 if (st.boardState.turn == PieceColor.WHITE) {
                     val next = (st.whiteTimeSec - 1).coerceAtLeast(0L)
                     _matchState.update { it.copy(whiteTimeSec = next) }
                     if (next == 0L) {
-                        soundManager.play(ChessSound.DEFEAT)
-                        finalizeMatch(GameResult.WHITE_TIMEOUT)
+                        val res = st.boardState.evaluateTimeoutResult(PieceColor.WHITE)
+                        playEndFeedback(res, st.playerColor)
+                        finalizeMatch(res)
                         break
                     }
                 } else {
                     val next = (st.blackTimeSec - 1).coerceAtLeast(0L)
                     _matchState.update { it.copy(blackTimeSec = next) }
                     if (next == 0L) {
-                        soundManager.play(ChessSound.VICTORY)
-                        finalizeMatch(GameResult.BLACK_TIMEOUT)
+                        val res = st.boardState.evaluateTimeoutResult(PieceColor.BLACK)
+                        playEndFeedback(res, st.playerColor)
+                        finalizeMatch(res)
                         break
                     }
                 }
@@ -446,14 +666,14 @@ class ChessViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun resumeSavedGame(entity: SavedGameEntity) {
-        botThinkingJob?.cancel()
-        clockJob?.cancel()
+        cancelBackgroundJobs()
+        val mode = GameMode.byId(entity.gameMode)
         val isCustom = entity.botId.startsWith("custom:")
         val customParts = if (isCustom) entity.botId.split(":") else emptyList()
         val customPersonality = if (customParts.size >= 2) {
             EnginePersonality.byId(customParts[1])
         } else preferences.value.enginePersonality
-        val customElo = customParts.getOrNull(2)?.toIntOrNull() ?: preferences.value.customEngineElo
+        val customElo = customParts.getOrNull(2)?.toIntOrNull() ?: preferences.value.effectiveEngineElo
 
         val bot = BotPersona.byId(entity.botId)
         val playerColor = runCatching { PieceColor.valueOf(entity.playerColor) }.getOrDefault(PieceColor.WHITE)
@@ -461,6 +681,7 @@ class ChessViewModel(application: Application) : AndroidViewModel(application) {
         val board = ChessBoardState.fromFen(entity.currentFen)
         val legal = board.generateLegalMoves()
         val result = runCatching { GameResult.valueOf(entity.resultName) }.getOrDefault(GameResult.ONGOING)
+        val tc = TimeControl.byId(entity.timeControlId)
 
         val report = if (entity.isCompleted) {
             ChessCoachAnalyzer.buildPostGameReport(
@@ -473,42 +694,63 @@ class ChessViewModel(application: Application) : AndroidViewModel(application) {
         } else null
 
         _matchState.value = ActiveMatchUiState(
+            sessionUuid = "saved_${entity.id}",
             savedGameId = entity.id,
+            gameMode = mode,
             bot = bot,
             usingCustomEngine = isCustom,
             customEngineElo = customElo,
             customPersonality = customPersonality,
+            personalityIntensity = preferences.value.personalityIntensity,
+            personalityRisk = preferences.value.personalityRisk,
             humanStyle = preferences.value.humanStyleEnabled,
+            customStartFen = entity.startFen.takeIf { it != ChessBoardState.INITIAL_FEN },
+            editedPosition = entity.edited,
+            strengthMixed = entity.strengthMixed,
+            hintsUsed = entity.hintsUsed,
+            assisted = entity.assisted,
             playerColor = playerColor,
             boardState = board,
             legalMoves = legal,
             recordedMoves = moves,
             evalWhiteCp = moves.lastOrNull()?.evalWhiteCp ?: 15,
             gameResult = result,
-            flippedBoard = playerColor == PieceColor.BLACK,
+            claimableDrawReason = if (result.isOngoing) board.canClaimDraw() else null,
+            flippedBoard = entity.flipped,
             botChatMessageAr = if (entity.isCompleted) "مراجعة وتحليل المباراة السابقة" else "عدنا للمباراة! دورك لإكمال الخطة.",
             postGameReport = report,
             showPostGameSheet = false,
             reviewIndex = if (entity.isCompleted && moves.isNotEmpty()) moves.lastIndex else null,
             isAdaptiveMatch = preferences.value.adaptiveMode,
-            timeControl = TimeControl.UNLIMITED,
-            whiteTimeSec = 0L,
-            blackTimeSec = 0L
+            timeControl = tc,
+            whiteTimeSec = entity.whiteTimeSec,
+            blackTimeSec = entity.blackTimeSec,
+            fullReviewCompleted = entity.reviewCompleted,
+            reviewCacheKey = entity.reviewCacheKey
         )
 
-        if (!entity.isCompleted && result == GameResult.ONGOING && board.turn != playerColor) {
-            triggerBotMove()
+        if (!entity.isCompleted && result == GameResult.ONGOING) {
+            startClockTickerIfTimed()
+            if (mode != GameMode.LOCAL_TWO_PLAYER && board.turn != playerColor) {
+                triggerBotMove()
+            }
         }
     }
 
     fun onMatchSquareClick(square: Square) {
         val st = _matchState.value
         if (st.isReviewingPastMove) {
-            // Return to live board if user taps while reviewing
-            _matchState.update { it.copy(reviewIndex = null) }
+            _matchState.update { it.copy(reviewIndex = null, multiPvLines = emptyList()) }
             return
         }
-        if (st.gameResult != GameResult.ONGOING || st.isBotThinking || st.boardState.turn != st.playerColor) return
+        if (st.gameResult != GameResult.ONGOING || st.isBotThinking) return
+
+        val allowedMoverColor = if (st.gameMode == GameMode.LOCAL_TWO_PLAYER) {
+            st.boardState.turn
+        } else {
+            if (st.boardState.turn != st.playerColor) return
+            st.playerColor
+        }
 
         val selected = st.selectedSquare
         if (selected != null) {
@@ -523,14 +765,14 @@ class ChessViewModel(application: Application) : AndroidViewModel(application) {
                         )
                     }
                 } else {
-                    executePlayerMove(matchingMoves.first())
+                    executePlayerMove(matchingMoves.first(), allowedMoverColor)
                 }
                 return
             }
         }
 
         val piece = st.boardState.pieceAt(square)
-        if (piece != null && piece.color == st.playerColor) {
+        if (piece != null && piece.color == allowedMoverColor) {
             val movesForPiece = st.legalMoves.filter { it.from == square }
             _matchState.update {
                 it.copy(
@@ -552,14 +794,14 @@ class ChessViewModel(application: Application) : AndroidViewModel(application) {
             it.from == pair.first && it.to == pair.second && it.promotion == pieceType
         } ?: return
         _matchState.update { it.copy(pendingPromotion = null) }
-        executePlayerMove(move)
+        executePlayerMove(move, st.boardState.turn)
     }
 
     fun dismissPromotion() {
         _matchState.update { it.copy(pendingPromotion = null) }
     }
 
-    private fun executePlayerMove(move: ChessMove) {
+    private fun executePlayerMove(move: ChessMove, moverColor: PieceColor) {
         val st = _matchState.value
         val beforeState = st.boardState
         val legalBefore = st.legalMoves
@@ -568,13 +810,13 @@ class ChessViewModel(application: Application) : AndroidViewModel(application) {
         val afterState = beforeState.copyWithMove(move)
         val afterLegal = afterState.generateLegalMoves()
         val result = afterState.evaluateGameResult(afterLegal)
+        val claimDraw = if (result.isOngoing) afterState.canClaimDraw() else null
 
-        // Immediate responsive sound
-        playMoveSound(move, afterState, result, st.playerColor)
+        playMoveFeedback(move, afterState, result, st.playerColor)
 
         val placeholderRecord = RecordedMove(
             moveNumber = beforeState.fullMoveNumber,
-            color = st.playerColor,
+            color = moverColor,
             move = move,
             san = san,
             fenAfter = afterState.toFen(),
@@ -586,9 +828,10 @@ class ChessViewModel(application: Application) : AndroidViewModel(application) {
         )
         val updatedList = st.recordedMoves + placeholderRecord
 
-        val inc = if (st.timeControl != TimeControl.UNLIMITED && st.recordedMoves.isNotEmpty()) {
-            st.timeControl.incrementSeconds
-        } else 0L
+        val isLocal = st.gameMode == GameMode.LOCAL_TWO_PLAYER
+        val nextChatMsg = if (isLocal) {
+            if (afterState.turn == PieceColor.WHITE) "مباراة محلية • دور الأبيض" else "مباراة محلية • دور الأسود"
+        } else st.botChatMessageAr
 
         _matchState.update {
             it.copy(
@@ -598,15 +841,17 @@ class ChessViewModel(application: Application) : AndroidViewModel(application) {
                 legalMovesForSelected = emptyList(),
                 recordedMoves = updatedList,
                 currentHint = null,
+                progressiveHint = null,
+                currentHintStage = null,
+                multiPvLines = emptyList(),
                 gameResult = result,
-                isBotThinking = result == GameResult.ONGOING,
-                whiteTimeSec = if (st.playerColor == PieceColor.WHITE) it.whiteTimeSec + inc else it.whiteTimeSec,
-                blackTimeSec = if (st.playerColor == PieceColor.BLACK) it.blackTimeSec + inc else it.blackTimeSec
+                claimableDrawReason = claimDraw,
+                botChatMessageAr = nextChatMsg,
+                isBotThinking = result == GameResult.ONGOING && !isLocal
             )
         }
 
         botThinkingJob = viewModelScope.launch {
-            // 1) Analyze player's move in background
             val evalResult = withContext(Dispatchers.Default) {
                 ChessCoachAnalyzer.analyzePlayedMove(
                     stateBefore = beforeState,
@@ -630,10 +875,14 @@ class ChessViewModel(application: Application) : AndroidViewModel(application) {
                 if (list.isNotEmpty()) {
                     list[list.lastIndex] = analyzedMove
                 }
-                val reaction = when (evalResult.quality) {
-                    MoveQuality.BRILLIANT, MoveQuality.BEST -> current.bot.goodMoveReactionsAr.random()
-                    MoveQuality.MISTAKE, MoveQuality.BLUNDER -> current.bot.blunderReactionsAr.random()
-                    else -> current.botChatMessageAr
+                val reaction = if (isLocal) {
+                    current.botChatMessageAr
+                } else {
+                    when (evalResult.quality) {
+                        MoveQuality.BRILLIANT, MoveQuality.BEST -> current.bot.goodMoveReactionsAr.random()
+                        MoveQuality.MISTAKE, MoveQuality.BLUNDER -> current.bot.blunderReactionsAr.random()
+                        else -> current.botChatMessageAr
+                    }
                 }
                 current.copy(
                     recordedMoves = list,
@@ -648,27 +897,28 @@ class ChessViewModel(application: Application) : AndroidViewModel(application) {
                 return@launch
             }
 
-            // Auto-save ongoing progress
             saveCurrentMatchProgress()
 
-            // 2) Compute Bot response
-            delay(220)
-            performBotSearchAndMove()
+            if (!isLocal) {
+                delay(200)
+                performBotSearchAndMove()
+            }
         }
     }
 
     private fun triggerBotMove() {
+        if (_matchState.value.gameMode == GameMode.LOCAL_TWO_PLAYER) return
         botThinkingJob?.cancel()
         _matchState.update { it.copy(isBotThinking = true) }
         botThinkingJob = viewModelScope.launch {
-            delay(320)
+            delay(280)
             performBotSearchAndMove()
         }
     }
 
     private suspend fun performBotSearchAndMove() {
         val st = _matchState.value
-        if (st.gameResult != GameResult.ONGOING) {
+        if (st.gameResult != GameResult.ONGOING || st.gameMode == GameMode.LOCAL_TWO_PLAYER) {
             _matchState.update { it.copy(isBotThinking = false) }
             return
         }
@@ -677,6 +927,21 @@ class ChessViewModel(application: Application) : AndroidViewModel(application) {
         val pref = preferences.value
         val adaptiveElo = if (st.isAdaptiveMatch) pref.playerElo else null
         val appCtx = getApplication<Application>()
+
+        val remainingClockMs: Long? = if (st.timeControl != TimeControl.UNLIMITED) {
+            val sec = if (stateBefore.turn == PieceColor.WHITE) st.whiteTimeSec else st.blackTimeSec
+            sec * 1000L
+        } else null
+
+        val prevBotMove = st.recordedMoves.lastOrNull { it.color == stateBefore.turn }
+        val prevWing = prevBotMove?.move?.to?.col?.let {
+            when {
+                it <= 2 -> 0
+                it >= 5 -> 2
+                else -> 1
+            }
+        }
+        val prevPiece = prevBotMove?.let { stateBefore.pieceAt(it.move.to)?.type }
 
         val searchResult = if (st.usingCustomEngine) {
             StockfishUciEngine.computeMove(
@@ -687,7 +952,14 @@ class ChessViewModel(application: Application) : AndroidViewModel(application) {
                 personality = st.customPersonality,
                 humanStyle = st.humanStyle,
                 moveTimeMs = pref.stockfishMoveTimeMs,
-                threads = pref.stockfishThreads
+                threads = pref.stockfishThreads,
+                personalityIntensity = st.personalityIntensity,
+                personalityRisk = st.personalityRisk,
+                sessionId = st.sessionUuid,
+                remainingClockMs = remainingClockMs,
+                gameSeed = st.sessionUuid.hashCode().toLong(),
+                lastMoveFromWing = prevWing,
+                lastMovedPieceType = prevPiece
             )
         } else {
             StockfishUciEngine.computeBotMove(
@@ -697,9 +969,11 @@ class ChessViewModel(application: Application) : AndroidViewModel(application) {
                 bot = st.bot,
                 adaptivePlayerElo = adaptiveElo,
                 moveTimeMs = pref.stockfishMoveTimeMs,
-                threads = pref.stockfishThreads
+                threads = pref.stockfishThreads,
+                sessionId = st.sessionUuid
             )
         }
+
         val nodesStr = if (searchResult.nodesSearched > 0) " • ${searchResult.nodesSearched} عقدة" else ""
         _lastEngineTelemetry.value = "${searchResult.sourceName} • عمق ${searchResult.depthReached}$nodesStr"
 
@@ -716,8 +990,9 @@ class ChessViewModel(application: Application) : AndroidViewModel(application) {
         val afterState = stateBefore.copyWithMove(botMove)
         val afterLegal = afterState.generateLegalMoves()
         val result = afterState.evaluateGameResult(afterLegal)
+        val claimDraw = if (result.isOngoing) afterState.canClaimDraw() else null
 
-        playMoveSound(botMove, afterState, result, st.playerColor)
+        playMoveFeedback(botMove, afterState, result, st.playerColor)
 
         val engineLabel = if (st.usingCustomEngine) st.customPersonality.nameAr else st.bot.nameAr
         val botRecord = RecordedMove(
@@ -734,8 +1009,6 @@ class ChessViewModel(application: Application) : AndroidViewModel(application) {
             coachNoteAr = "نقلة $engineLabel"
         )
 
-        val inc = if (st.timeControl != TimeControl.UNLIMITED) st.timeControl.incrementSeconds else 0L
-
         _matchState.update {
             it.copy(
                 boardState = afterState,
@@ -744,8 +1017,7 @@ class ChessViewModel(application: Application) : AndroidViewModel(application) {
                 evalWhiteCp = searchResult.evalWhiteCp,
                 isBotThinking = false,
                 gameResult = result,
-                whiteTimeSec = if (stateBefore.turn == PieceColor.WHITE) it.whiteTimeSec + inc else it.whiteTimeSec,
-                blackTimeSec = if (stateBefore.turn == PieceColor.BLACK) it.blackTimeSec + inc else it.blackTimeSec
+                claimableDrawReason = claimDraw
             )
         }
 
@@ -766,7 +1038,17 @@ class ChessViewModel(application: Application) : AndroidViewModel(application) {
             playerColor = st.playerColor,
             currentFen = st.boardState.toFen(),
             moves = st.recordedMoves,
-            openingNameAr = opening
+            openingNameAr = opening,
+            gameMode = st.gameMode.id,
+            startFen = st.customStartFen ?: ChessBoardState.INITIAL_FEN,
+            timeControlId = st.timeControl.id,
+            whiteTimeSec = st.whiteTimeSec,
+            blackTimeSec = st.blackTimeSec,
+            hintsUsed = st.hintsUsed,
+            assisted = st.assisted,
+            strengthMixed = st.strengthMixed,
+            edited = st.editedPosition,
+            flipped = st.flippedBoard
         )
         _matchState.update { it.copy(savedGameId = id) }
     }
@@ -792,24 +1074,70 @@ class ChessViewModel(application: Application) : AndroidViewModel(application) {
             result = result,
             report = report,
             currentElo = preferences.value.playerElo,
-            solvedPuzzleCount = puzzleRecords.value.size
+            solvedPuzzleCount = puzzleRecords.value.size,
+            gameMode = st.gameMode.id,
+            startFen = st.customStartFen ?: ChessBoardState.INITIAL_FEN,
+            timeControlId = st.timeControl.id,
+            whiteTimeSec = st.whiteTimeSec,
+            blackTimeSec = st.blackTimeSec,
+            hintsUsed = st.hintsUsed,
+            assisted = st.assisted,
+            strengthMixed = st.strengthMixed,
+            edited = st.editedPosition,
+            flipped = st.flippedBoard
         )
 
+        val autoReview = preferences.value.autoReviewAfterGame && st.recordedMoves.isNotEmpty()
         _matchState.update {
             it.copy(
                 gameResult = result,
+                claimableDrawReason = null,
                 isBotThinking = false,
                 postGameReport = report,
                 newlyUnlockedAchievements = unlocked,
                 showPostGameSheet = preferences.value.autoReviewAfterGame
             )
         }
+        if (autoReview) {
+            startOrResumeFullReview()
+        }
     }
 
+    /**
+     * Ruqaa Section 8.2: 3-stage progressive hint cached per FEN, player turn only.
+     */
     fun requestHint() {
         val st = _matchState.value
         if (st.gameResult != GameResult.ONGOING || st.isBotThinking || st.isAnalyzingHint) return
-        if (st.boardState.turn != st.playerColor) return
+        if (st.gameMode != GameMode.LOCAL_TWO_PLAYER && st.boardState.turn != st.playerColor) return
+
+        val fenKey = st.boardState.toFen()
+        val cached = st.hintCacheByFen[fenKey]
+        if (cached != null) {
+            val nextStage = when (st.currentHintStage) {
+                null -> HintStage.CONCEPT
+                HintStage.CONCEPT -> HintStage.PIECE
+                HintStage.PIECE, HintStage.EXACT -> HintStage.EXACT
+            }
+            val displayHint = MoveHint(
+                move = cached.move,
+                san = cached.san,
+                explanationAr = when (nextStage) {
+                    HintStage.CONCEPT -> cached.conceptAr
+                    HintStage.PIECE -> cached.pieceHintAr
+                    HintStage.EXACT -> cached.exactMoveAr
+                }
+            )
+            _matchState.update {
+                it.copy(
+                    currentHint = displayHint,
+                    progressiveHint = cached,
+                    currentHintStage = nextStage
+                )
+            }
+            return
+        }
+
         _matchState.update { it.copy(isAnalyzingHint = true) }
         val pref = preferences.value
         viewModelScope.launch {
@@ -817,20 +1145,168 @@ class ChessViewModel(application: Application) : AndroidViewModel(application) {
                 context = getApplication(),
                 state = st.boardState,
                 backendPreference = pref.engineBackendPreference,
-                moveTimeMs = pref.stockfishMoveTimeMs,
+                moveTimeMs = 320,
                 threads = pref.stockfishThreads
             )
-            val hint = withContext(Dispatchers.Default) {
-                ChessCoachAnalyzer.generateHint(st.boardState, precomputedBest = search.bestMove)
+            val prog = withContext(Dispatchers.Default) {
+                ChessCoachAnalyzer.generateProgressiveHint(st.boardState, precomputedBest = search.bestMove)
             }
             val nodesStr = if (search.nodesSearched > 0) " • ${search.nodesSearched} عقدة" else ""
             _lastEngineTelemetry.value = "${search.sourceName} • عمق ${search.depthReached}$nodesStr"
+
+            if (prog != null) {
+                val stage1Hint = MoveHint(
+                    move = prog.move,
+                    san = prog.san,
+                    explanationAr = prog.conceptAr
+                )
+                _matchState.update {
+                    it.copy(
+                        isAnalyzingHint = false,
+                        currentHint = stage1Hint,
+                        progressiveHint = prog,
+                        currentHintStage = HintStage.CONCEPT,
+                        hintCacheByFen = it.hintCacheByFen + (fenKey to prog),
+                        hintsUsed = it.hintsUsed + 1,
+                        assisted = true
+                    )
+                }
+                saveCurrentMatchProgress()
+            } else {
+                _matchState.update { it.copy(isAnalyzingHint = false) }
+            }
+        }
+    }
+
+    /**
+     * Ruqaa Section 8.3: Pausable & resumable post-game review keyed by SHA-256.
+     */
+    fun startOrResumeFullReview() {
+        val st = _matchState.value
+        if (st.gameResult == GameResult.ONGOING || st.recordedMoves.isEmpty()) return
+        if (st.isFullReviewRunning) return
+
+        val engineId = _stockfishStatus.value.engineName
+        val startFen = st.customStartFen ?: ChessBoardState.INITIAL_FEN
+        val key = ChessCoachAnalyzer.computeReviewCacheKey(engineId, startFen, st.recordedMoves.map { it.move.toUci() })
+
+        if (st.fullReviewCompleted && st.reviewCacheKey == key) {
+            return
+        }
+
+        val resumeFrom = if (st.reviewCacheKey == key) st.fullReviewNextIndex else 0
+        _matchState.update {
+            it.copy(
+                isFullReviewRunning = true,
+                isFullReviewPaused = false,
+                fullReviewNextIndex = resumeFrom.coerceIn(0, st.recordedMoves.size),
+                fullReviewCompleted = false,
+                reviewCacheKey = key
+            )
+        }
+
+        fullReviewJob?.cancel()
+        fullReviewJob = viewModelScope.launch {
+            var currentBoard = ChessBoardState.fromFen(startFen)
+            val total = st.recordedMoves.size
+            for (idx in 0 until total) {
+                val rec = _matchState.value.recordedMoves.getOrNull(idx) ?: break
+                val legalBefore = currentBoard.generateLegalMoves()
+                if (idx >= resumeFrom) {
+                    if (_matchState.value.isFullReviewPaused) break
+                    val eval = withContext(Dispatchers.Default) {
+                        ChessCoachAnalyzer.analyzePlayedMove(currentBoard, rec.move, legalBefore, depth = 3)
+                    }
+                    val updatedMove = rec.copy(
+                        evalBeforeWhiteCp = eval.evalBeforeWhiteCp,
+                        evalWhiteCp = eval.evalAfterWhiteCp,
+                        centipawnLoss = eval.centipawnLoss,
+                        quality = eval.quality,
+                        bestMoveSan = eval.bestMoveSan,
+                        coachNoteAr = eval.coachNoteAr
+                    )
+                    _matchState.update { curr ->
+                        val mutable = curr.recordedMoves.toMutableList()
+                        if (idx in mutable.indices) mutable[idx] = updatedMove
+                        curr.copy(
+                            recordedMoves = mutable,
+                            fullReviewNextIndex = idx + 1
+                        )
+                    }
+                }
+                currentBoard = currentBoard.copyWithMove(rec.move)
+            }
+
+            val finished = _matchState.value.fullReviewNextIndex >= total && !_matchState.value.isFullReviewPaused
+            if (finished) {
+                val updated = _matchState.value
+                val refreshedReport = withContext(Dispatchers.Default) {
+                    ChessCoachAnalyzer.buildPostGameReport(
+                        moves = updated.recordedMoves,
+                        playerColor = updated.playerColor,
+                        result = updated.gameResult,
+                        bot = updated.bot,
+                        currentPlayerElo = preferences.value.playerElo
+                    )
+                }
+                _matchState.update {
+                    it.copy(
+                        isFullReviewRunning = false,
+                        fullReviewCompleted = true,
+                        postGameReport = refreshedReport
+                    )
+                }
+                updated.savedGameId?.let { gid ->
+                    repository.updateCompletedReview(gid, updated.recordedMoves, refreshedReport, key, true)
+                }
+            } else {
+                _matchState.update { it.copy(isFullReviewRunning = false) }
+            }
+        }
+    }
+
+    fun pauseFullReview() {
+        fullReviewJob?.cancel()
+        _matchState.update {
+            it.copy(isFullReviewRunning = false, isFullReviewPaused = true)
+        }
+    }
+
+    /**
+     * Ruqaa Section 8.1: MultiPV-3 interactive analysis of current displayed board position.
+     */
+    fun analyzeDisplayedPositionMultiPv() {
+        val st = _matchState.value
+        val targetState = st.displayedBoardState
+        if (st.isAnalyzingMultiPv) return
+        multiPvJob?.cancel()
+        _matchState.update { it.copy(isAnalyzingMultiPv = true) }
+        multiPvJob = viewModelScope.launch {
+            val lines = StockfishUciEngine.analyzeMultiPv(
+                context = getApplication(),
+                state = targetState,
+                backendPreference = preferences.value.engineBackendPreference,
+                multiPv = 3,
+                moveTimeMs = 1700,
+                sessionId = "analysis_${st.sessionUuid}"
+            )
             _matchState.update {
                 it.copy(
-                    isAnalyzingHint = false,
-                    currentHint = hint
+                    isAnalyzingMultiPv = false,
+                    multiPvLines = lines
                 )
             }
+        }
+    }
+
+    fun claimDraw() {
+        val st = _matchState.value
+        if (st.gameResult != GameResult.ONGOING || st.claimableDrawReason == null) return
+        botThinkingJob?.cancel()
+        clockJob?.cancel()
+        playEndFeedback(GameResult.DRAW_CLAIMED, st.playerColor)
+        viewModelScope.launch {
+            finalizeMatch(GameResult.DRAW_CLAIMED)
         }
     }
 
@@ -840,8 +1316,11 @@ class ChessViewModel(application: Application) : AndroidViewModel(application) {
         val moves = st.recordedMoves
         if (moves.isEmpty()) return
 
-        // Undo back until it's player's turn again (usually 2 plies: bot + player)
-        var dropCount = if (moves.last().color != st.playerColor) 2 else 1
+        var dropCount = if (st.gameMode == GameMode.LOCAL_TWO_PLAYER) {
+            1
+        } else {
+            if (moves.last().color != st.playerColor) 2 else 1
+        }
         if (moves.size < dropCount) dropCount = moves.size
         val remaining = moves.dropLast(dropCount)
 
@@ -858,6 +1337,10 @@ class ChessViewModel(application: Application) : AndroidViewModel(application) {
                 selectedSquare = null,
                 legalMovesForSelected = emptyList(),
                 currentHint = null,
+                progressiveHint = null,
+                currentHintStage = null,
+                multiPvLines = emptyList(),
+                claimableDrawReason = targetBoard.canClaimDraw(),
                 reviewIndex = null,
                 evalWhiteCp = remaining.lastOrNull()?.evalWhiteCp ?: 15,
                 lastMoveQualityBadge = null
@@ -882,15 +1365,16 @@ class ChessViewModel(application: Application) : AndroidViewModel(application) {
         if (st.gameResult != GameResult.ONGOING) return
         botThinkingJob?.cancel()
         clockJob?.cancel()
-        val res = if (st.playerColor == PieceColor.WHITE) GameResult.WHITE_RESIGNED else GameResult.BLACK_RESIGNED
-        soundManager.play(ChessSound.DEFEAT)
+        val resigningColor = if (st.gameMode == GameMode.LOCAL_TWO_PLAYER) st.boardState.turn else st.playerColor
+        val res = if (resigningColor == PieceColor.WHITE) GameResult.WHITE_RESIGNED else GameResult.BLACK_RESIGNED
+        playEndFeedback(res, st.playerColor)
         viewModelScope.launch {
             finalizeMatch(res)
         }
     }
 
     fun selectReviewMove(index: Int?) {
-        _matchState.update { it.copy(reviewIndex = index) }
+        _matchState.update { it.copy(reviewIndex = index, multiPvLines = emptyList()) }
     }
 
     fun openMoveLedgerSheet() {
@@ -958,13 +1442,13 @@ class ChessViewModel(application: Application) : AndroidViewModel(application) {
         val st = _puzzleState.value
         val expectedUci = st.puzzle.solutionUci.getOrNull(st.stepIndex) ?: return
 
-        // Match UCI (allow auto-queen promotion if solution ends in q)
         val playedUci = move.toUci()
         val matches = playedUci == expectedUci ||
             (expectedUci.length == 5 && playedUci.startsWith(expectedUci.substring(0, 4)) && move.promotion == PieceType.QUEEN)
 
         if (!matches) {
             soundManager.play(ChessSound.DEFEAT)
+            hapticsManager.trigger(ChessHapticEvent.CAPTURE)
             _puzzleState.update {
                 it.copy(
                     selectedSquare = null,
@@ -977,13 +1461,12 @@ class ChessViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        // Correct move!
         val afterPlayer = st.boardState.copyWithMove(move)
         val nextStep = st.stepIndex + 1
 
         if (nextStep >= st.puzzle.solutionUci.size) {
-            // Puzzle solved!
             soundManager.play(ChessSound.PUZZLE_SOLVED)
+            hapticsManager.trigger(ChessHapticEvent.GAME_END)
             _puzzleState.update {
                 it.copy(
                     boardState = afterPlayer,
@@ -1011,8 +1494,8 @@ class ChessViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        // Play opponent forced reply automatically
         soundManager.play(ChessSound.MOVE)
+        hapticsManager.trigger(ChessHapticEvent.MOVE)
         _puzzleState.update {
             it.copy(
                 boardState = afterPlayer,
@@ -1033,6 +1516,7 @@ class ChessViewModel(application: Application) : AndroidViewModel(application) {
             val oppMove = curr.legalMoves.find { it.toUci() == oppUci } ?: return@launch
             val afterOpp = curr.boardState.copyWithMove(oppMove)
             soundManager.play(if (oppMove.capturedPiece != null) ChessSound.CAPTURE else ChessSound.MOVE)
+            hapticsManager.trigger(if (oppMove.capturedPiece != null) ChessHapticEvent.CAPTURE else ChessHapticEvent.MOVE)
             _puzzleState.update {
                 it.copy(
                     boardState = afterOpp,
@@ -1057,7 +1541,7 @@ class ChessViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun playMoveSound(
+    private fun playMoveFeedback(
         move: ChessMove,
         afterState: ChessBoardState,
         result: GameResult,
@@ -1068,16 +1552,40 @@ class ChessViewModel(application: Application) : AndroidViewModel(application) {
                 val playerWon = (result == GameResult.WHITE_WINS_CHECKMATE && playerColor == PieceColor.WHITE) ||
                     (result == GameResult.BLACK_WINS_CHECKMATE && playerColor == PieceColor.BLACK)
                 soundManager.play(if (playerWon) ChessSound.VICTORY else ChessSound.DEFEAT)
+                hapticsManager.trigger(ChessHapticEvent.GAME_END)
             }
-            afterState.isInCheck(afterState.turn) -> soundManager.play(ChessSound.CHECK)
-            move.isCastleKingside || move.isCastleQueenside -> soundManager.play(ChessSound.CASTLE)
-            move.capturedPiece != null || move.isEnPassant -> soundManager.play(ChessSound.CAPTURE)
-            else -> soundManager.play(ChessSound.MOVE)
+            !result.isOngoing -> {
+                soundManager.play(ChessSound.MOVE)
+                hapticsManager.trigger(ChessHapticEvent.GAME_END)
+            }
+            afterState.isInCheck(afterState.turn) -> {
+                soundManager.play(ChessSound.CHECK)
+                hapticsManager.trigger(ChessHapticEvent.CHECK)
+            }
+            move.isCastleKingside || move.isCastleQueenside -> {
+                soundManager.play(ChessSound.CASTLE)
+                hapticsManager.trigger(ChessHapticEvent.CASTLE)
+            }
+            move.capturedPiece != null || move.isEnPassant -> {
+                soundManager.play(ChessSound.CAPTURE)
+                hapticsManager.trigger(ChessHapticEvent.CAPTURE)
+            }
+            else -> {
+                soundManager.play(ChessSound.MOVE)
+                hapticsManager.trigger(ChessHapticEvent.MOVE)
+            }
         }
+    }
+
+    private fun playEndFeedback(result: GameResult, playerColor: PieceColor) {
+        val won = (result == GameResult.BLACK_RESIGNED || result == GameResult.BLACK_TIMEOUT) && playerColor == PieceColor.WHITE ||
+            (result == GameResult.WHITE_RESIGNED || result == GameResult.WHITE_TIMEOUT) && playerColor == PieceColor.BLACK
+        soundManager.play(if (won) ChessSound.VICTORY else ChessSound.DEFEAT)
+        hapticsManager.trigger(ChessHapticEvent.GAME_END)
     }
 
     override fun onCleared() {
         super.onCleared()
-        StockfishUciEngine.closeSession()
+        cancelBackgroundJobs()
     }
 }

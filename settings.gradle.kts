@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "EliteChess"
+rootProject.name = "Ruqaa"
 
 include(":app")

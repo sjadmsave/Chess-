@@ -1,7 +1,9 @@
 package com.example.data
 
 import com.example.chess.BotPersona
+import com.example.chess.ChessBoardState
 import com.example.chess.EnginePersonality
+import com.example.chess.GameMode
 import com.example.chess.GameResult
 import com.example.chess.MoveQuality
 import com.example.chess.PieceColor
@@ -12,11 +14,13 @@ import java.util.Calendar
 import kotlin.math.roundToInt
 
 fun formatOpponentTitle(botId: String): String {
+    if (botId == "local_2p") return "لاعبان محليان (جهاز واحد)"
     if (botId.startsWith("custom:")) {
         val parts = botId.split(":")
-        val personality = parts.getOrNull(1)?.let { EnginePersonality.byId(it) } ?: EnginePersonality.OPPORTUNITY_HUNTER
-        val elo = parts.getOrNull(2)?.toIntOrNull() ?: 1800
-        return "مخصص • نحو $elo إيلو • ${personality.nameAr}"
+        val personality = parts.getOrNull(1)?.let { EnginePersonality.byId(it) } ?: EnginePersonality.CLASSIC
+        val elo = parts.getOrNull(2)?.toIntOrNull() ?: -1
+        val eloText = if (elo <= 0) "بلا حد (أقصى قوة)" else "نحو $elo إيلو"
+        return "ضد المحرك • $eloText • ${personality.nameAr}"
     }
     val bot = BotPersona.byId(botId)
     return "${bot.nameAr} • ${bot.elo} ELO"
@@ -44,6 +48,24 @@ data class PeriodicReport(
     val nextActionAr: String
 )
 
+data class WdlRecord(
+    val wins: Int = 0,
+    val draws: Int = 0,
+    val losses: Int = 0
+) {
+    val total: Int get() = wins + draws + losses
+}
+
+data class RuqaaEngineStatsSummary(
+    val totalEngineGames: Int = 0,
+    val unassistedCount: Int = 0,
+    val assistedCount: Int = 0,
+    val customPositionCount: Int = 0,
+    val strengthMixedCount: Int = 0,
+    val byStrength: Map<String, WdlRecord> = emptyMap(),
+    val byPersonality: Map<String, WdlRecord> = emptyMap()
+)
+
 class ChessRepository(
     private val db: ChessDatabase,
     val prefs: UserPreferencesRepository
@@ -66,7 +88,17 @@ class ChessRepository(
         playerColor: PieceColor,
         currentFen: String,
         moves: List<RecordedMove>,
-        openingNameAr: String
+        openingNameAr: String,
+        gameMode: String = GameMode.VS_ENGINE.id,
+        startFen: String = ChessBoardState.INITIAL_FEN,
+        timeControlId: String = "unlimited",
+        whiteTimeSec: Long = 0L,
+        blackTimeSec: Long = 0L,
+        hintsUsed: Int = 0,
+        assisted: Boolean = false,
+        strengthMixed: Boolean = false,
+        edited: Boolean = false,
+        flipped: Boolean = false
     ): Long {
         val entity = SavedGameEntity(
             id = existingId ?: 0L,
@@ -85,7 +117,17 @@ class ChessRepository(
             middlegameAccuracy = 0,
             endgameAccuracy = 0,
             eloDelta = 0,
-            updatedAt = System.currentTimeMillis()
+            updatedAt = System.currentTimeMillis(),
+            gameMode = gameMode,
+            startFen = startFen,
+            timeControlId = timeControlId,
+            whiteTimeSec = whiteTimeSec,
+            blackTimeSec = blackTimeSec,
+            hintsUsed = hintsUsed,
+            assisted = assisted,
+            strengthMixed = strengthMixed,
+            edited = edited,
+            flipped = flipped
         )
         return savedGameDao.upsert(entity)
     }
@@ -106,7 +148,19 @@ class ChessRepository(
         result: GameResult,
         report: PostGameReport,
         currentElo: Int,
-        solvedPuzzleCount: Int
+        solvedPuzzleCount: Int,
+        gameMode: String = GameMode.VS_ENGINE.id,
+        startFen: String = ChessBoardState.INITIAL_FEN,
+        timeControlId: String = "unlimited",
+        whiteTimeSec: Long = 0L,
+        blackTimeSec: Long = 0L,
+        hintsUsed: Int = 0,
+        assisted: Boolean = false,
+        strengthMixed: Boolean = false,
+        edited: Boolean = false,
+        flipped: Boolean = false,
+        reviewCacheKey: String = "",
+        reviewCompleted: Boolean = false
     ): List<AchievementDef> {
         val now = System.currentTimeMillis()
         val effectiveBotId = botIdOverride ?: bot.id
@@ -126,14 +180,28 @@ class ChessRepository(
             openingAccuracy = report.openingAccuracy,
             middlegameAccuracy = report.middlegameAccuracy,
             endgameAccuracy = report.endgameAccuracy,
-            eloDelta = report.eloDelta,
-            updatedAt = now
+            eloDelta = if (gameMode == GameMode.LOCAL_TWO_PLAYER.id) 0 else report.eloDelta,
+            updatedAt = now,
+            gameMode = gameMode,
+            startFen = startFen,
+            timeControlId = timeControlId,
+            whiteTimeSec = whiteTimeSec,
+            blackTimeSec = blackTimeSec,
+            hintsUsed = hintsUsed,
+            assisted = assisted,
+            strengthMixed = strengthMixed,
+            edited = edited,
+            flipped = flipped,
+            reviewCacheKey = reviewCacheKey,
+            reviewCompleted = reviewCompleted
         )
         savedGameDao.upsert(gameEntity)
 
-        val won = (result == GameResult.WHITE_WINS_CHECKMATE || result == GameResult.BLACK_RESIGNED || result == GameResult.BLACK_TIMEOUT) && playerColor == PieceColor.WHITE ||
-            (result == GameResult.BLACK_WINS_CHECKMATE || result == GameResult.WHITE_RESIGNED || result == GameResult.WHITE_TIMEOUT) && playerColor == PieceColor.BLACK
+        if (gameMode == GameMode.LOCAL_TWO_PLAYER.id) {
+            return emptyList()
+        }
 
+        val won = didPlayerWin(result, playerColor)
         val newElo = (currentElo + report.eloDelta).coerceIn(400, 2800)
         val xpGain = (if (won) 45 else 20) + (report.playerAccuracy / 4)
         prefs.updateRatingAndXp(newElo, xpGain)
@@ -175,6 +243,107 @@ class ChessRepository(
         unlockIfEligible("puzzle_hunter", solvedPuzzleCount >= 5)
 
         return unlockedNow
+    }
+
+    suspend fun updateCompletedReview(
+        gameId: Long,
+        moves: List<RecordedMove>,
+        report: PostGameReport,
+        cacheKey: String,
+        completed: Boolean
+    ) {
+        val existing = savedGameDao.getById(gameId) ?: return
+        savedGameDao.upsert(
+            existing.copy(
+                movesEncoded = MoveCodec.encode(moves),
+                playerAccuracy = report.playerAccuracy,
+                opponentAccuracy = report.opponentAccuracy,
+                acpl = report.acpl,
+                openingAccuracy = report.openingAccuracy,
+                middlegameAccuracy = report.middlegameAccuracy,
+                endgameAccuracy = report.endgameAccuracy,
+                reviewCacheKey = cacheKey,
+                reviewCompleted = completed
+            )
+        )
+    }
+
+    /**
+     * Ruqaa Section 10.3: Counts only finished engine games, supports filtering out
+     * assisted/hintsUsed, custom/edited positions, and strengthMixed games.
+     */
+    fun buildEngineStatsSummary(
+        games: List<SavedGameEntity>,
+        unassistedOnly: Boolean
+    ): RuqaaEngineStatsSummary {
+        val finishedEngine = games.filter {
+            it.isCompleted && it.gameMode != GameMode.LOCAL_TWO_PLAYER.id && it.botId != "local_2p"
+        }
+        val assistedCount = finishedEngine.count { it.assisted || it.hintsUsed > 0 }
+        val customPosCount = finishedEngine.count { it.edited || it.startFen != ChessBoardState.INITIAL_FEN }
+        val strengthMixedCount = finishedEngine.count { it.strengthMixed }
+        val unassistedGames = finishedEngine.filter {
+            !it.assisted && it.hintsUsed == 0 &&
+                !it.edited && it.startFen == ChessBoardState.INITIAL_FEN &&
+                !it.strengthMixed
+        }
+
+        val target = if (unassistedOnly) unassistedGames else finishedEngine
+        val byStrength = linkedMapOf<String, WdlRecord>()
+        val byPersonality = linkedMapOf<String, WdlRecord>()
+
+        for (g in target) {
+            val res = runCatching { GameResult.valueOf(g.resultName) }.getOrDefault(GameResult.ONGOING)
+            val color = runCatching { PieceColor.valueOf(g.playerColor) }.getOrDefault(PieceColor.WHITE)
+            val won = didPlayerWin(res, color)
+            val draw = res.isDraw
+
+            val strengthKey = when {
+                g.strengthMixed -> "قوة متغيّرة"
+                g.botId.startsWith("custom:") -> {
+                    val elo = g.botId.split(":").getOrNull(2)?.toIntOrNull() ?: -1
+                    if (elo <= 0) "أقصى (بلا حد)" else "$elo إيلو"
+                }
+                else -> {
+                    val bot = BotPersona.byId(g.botId)
+                    "${bot.elo} إيلو"
+                }
+            }
+            val prevS = byStrength[strengthKey] ?: WdlRecord()
+            byStrength[strengthKey] = WdlRecord(
+                wins = prevS.wins + if (won) 1 else 0,
+                draws = prevS.draws + if (draw) 1 else 0,
+                losses = prevS.losses + if (!won && !draw) 1 else 0
+            )
+
+            val persKey = if (g.botId.startsWith("custom:")) {
+                val pId = g.botId.split(":").getOrNull(1).orEmpty()
+                EnginePersonality.byId(pId).nameAr
+            } else {
+                BotPersona.byId(g.botId).nameAr
+            }
+            val prevP = byPersonality[persKey] ?: WdlRecord()
+            byPersonality[persKey] = WdlRecord(
+                wins = prevP.wins + if (won) 1 else 0,
+                draws = prevP.draws + if (draw) 1 else 0,
+                losses = prevP.losses + if (!won && !draw) 1 else 0
+            )
+        }
+
+        return RuqaaEngineStatsSummary(
+            totalEngineGames = finishedEngine.size,
+            unassistedCount = unassistedGames.size,
+            assistedCount = assistedCount,
+            customPositionCount = customPosCount,
+            strengthMixedCount = strengthMixedCount,
+            byStrength = byStrength,
+            byPersonality = byPersonality
+        )
+    }
+
+    private fun didPlayerWin(result: GameResult, playerColor: PieceColor): Boolean {
+        return (result == GameResult.WHITE_WINS_CHECKMATE || result == GameResult.BLACK_RESIGNED || result == GameResult.BLACK_TIMEOUT) && playerColor == PieceColor.WHITE ||
+            (result == GameResult.BLACK_WINS_CHECKMATE || result == GameResult.WHITE_RESIGNED || result == GameResult.WHITE_TIMEOUT) && playerColor == PieceColor.BLACK
     }
 
     suspend fun recordPuzzleSolved(
@@ -234,8 +403,8 @@ class ChessRepository(
                 totalMistakes = 0,
                 weakestPhaseAr = "غير محدد بعد",
                 strongestPhaseAr = "غير محدد بعد",
-                diagnosisSummaryAr = "العب مباراتك الأولى ليقوم المحرك الذكي بتحليل أسلوبك ورسم مسار تطورك.",
-                nextActionAr = "ابدأ مباراة أمام بوبي فيشر أو حلّ لغز اليوم لبناء ملفك الإحصائي."
+                diagnosisSummaryAr = "العب مباراتك الأولى ليقوم المحرك بتحليل أسلوبك ورسم مسار تطورك.",
+                nextActionAr = "ابدأ مباراة جديدة أو حلّ لغز اليوم لبناء ملفك الإحصائي."
             )
         }
 
@@ -259,9 +428,9 @@ class ChessRepository(
         val blundersPerGame = blunders.toFloat() / total.toFloat()
         val diagnosis = when {
             blundersPerGame >= 1.5f ->
-                "تشخيص الفترة (${period.labelAr}): نقطة الضعف الأبرز هي الأخطاء الفادحة المفاجئة (${blunders} خطأ فادح في $total مباريات)، غالباً بسبب ترك قطع غير محمية تحت الضغط."
+                "تشخيص الفترة (${period.labelAr}): نقطة الضعف الأبرز هي الأخطاء الكبيرة المفاجئة (${blunders} خطأً في $total مباريات)."
             avgOpen < avgMid && avgOpen < 75 ->
-                "تشخيص الفترة (${period.labelAr}): مرحلة الافتتاح هي الأقل دقة ($avgOpen%)؛ تحتاج إلى تفعيل القطع الخفيفة والتبييت بصورة أسرع."
+                "تشخيص الفترة (${period.labelAr}): مرحلة الافتتاح هي الأقل دقة ($avgOpen%)؛ تحتاج إلى تفعيل القطع الخفيفة والتبييت مبكراً."
             avgEnd < avgMid && avgEnd < 78 ->
                 "تشخيص الفترة (${period.labelAr}): تتفوق في بداية ووسط المباراة، لكنك تفقد الأفضلية في النهايات ($avgEnd%)."
             else ->
@@ -270,13 +439,13 @@ class ChessRepository(
 
         val action = when {
             blundersPerGame >= 1.5f ->
-                "الحل المقترح: طبّق قاعدة (فحص التهديدات) قبل كل نقلة، وخصّص 5 دقائق يومياً لألغاز التكتيك."
+                "الحل المقترح: طبّق قاعدة فحص التهديدات قبل كل نقلة، وخصّص ٥ دقائق يومياً للألغاز التكتيكية."
             weakest == "الافتتاح" ->
-                "الحل المقترح: سيطر على e4/d4، أخرج الأحصنة قبل الفيلة، وبيّت مبكراً قبل النقلة الثامنة."
+                "الحل المقترح: سيطر على الوسط، أخرج الأحصنة والأفيال، وبيّت مبكراً."
             weakest == "نهاية اللعب" ->
-                "الحل المقترح: درّب نفسك في قسم (مهارات النهايات) على ترقية البيادق وتنشيط الملك نحو الوسط."
+                "الحل المقترح: تدرّب على ترقية البيادق الحرة وتفعيل الملك نحو الوسط."
             else ->
-                "الحل المقترح: انتقل لمواجهة الأستاذ التالي أو فعّل التحدي التكيفي لرفع سقف حساباتك التكتيكية."
+                "الحل المقترح: انتقل إلى مستوى قوة أعلى أو جرّب شخصيات محرك متنوعة."
         }
 
         return PeriodicReport(

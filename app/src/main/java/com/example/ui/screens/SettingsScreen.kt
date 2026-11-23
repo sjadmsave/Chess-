@@ -2,6 +2,7 @@ package com.example.ui.screens
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -17,7 +18,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -29,6 +30,8 @@ import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.ChevronLeft
 import androidx.compose.material.icons.rounded.DarkMode
+import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.FileOpen
 import androidx.compose.material.icons.rounded.GridView
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.LightMode
@@ -40,6 +43,7 @@ import androidx.compose.material.icons.rounded.PictureInPictureAlt
 import androidx.compose.material.icons.rounded.Psychology
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Speed
+import androidx.compose.material.icons.rounded.Storage
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
@@ -47,8 +51,10 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -71,20 +77,28 @@ import androidx.core.content.ContextCompat
 import com.example.chess.BoardTheme
 import com.example.chess.ChessBoardState
 import com.example.chess.EngineBackendPreference
+import com.example.chess.SoundProfile
 import com.example.chess.StockfishProbeResult
+import com.example.chess.StrengthTier
+import com.example.chess.SyzygyTableEntry
+import com.example.chess.VibrationStyle
 import com.example.data.UserPreferences
 import com.example.overlay.FloatingChessService
 import com.example.ui.components.MiniBoardThumbnail
 import com.example.ui.theme.AppThemeMode
-import com.example.ui.theme.MonoFontFamily
+import com.example.ui.theme.formatArabicNumber
+import kotlin.math.roundToInt
 
 @Composable
 fun SettingsScreen(
     prefs: UserPreferences,
     stockfishStatus: StockfishProbeResult,
+    syzygyTables: List<SyzygyTableEntry>,
+    syzygyStatusMessage: String?,
     onSelectThemeMode: (AppThemeMode) -> Unit,
     onSelectBoardTheme: (BoardTheme) -> Unit,
     onOpenBoardCustomization: () -> Unit,
+    onSelectStrengthTier: (StrengthTier) -> Unit,
     onOpenEngineEloDialog: () -> Unit,
     onToggleHumanStyle: (Boolean) -> Unit,
     onOpenPersonalitySheet: () -> Unit,
@@ -96,10 +110,17 @@ fun SettingsScreen(
     onOpenFloatingNow: () -> Unit,
     onOpenFloatingCustomization: () -> Unit,
     onToggleSound: (Boolean) -> Unit,
+    onSelectSoundProfile: (SoundProfile) -> Unit,
+    onChangeSoundVolume: (Int) -> Unit,
     onToggleHaptics: (Boolean) -> Unit,
+    onSelectVibrationStyle: (VibrationStyle) -> Unit,
     onToggleAutoReview: (Boolean) -> Unit,
     onUpdateReminders: (Boolean, Int, Int) -> Unit,
-    onTestNotification: () -> Unit
+    onTestNotification: () -> Unit,
+    onImportSyzygyFiles: (List<Uri>) -> Unit,
+    onDeleteSyzygyTable: (String) -> Unit,
+    onClearSyzygyTables: () -> Unit,
+    onOpenAboutLicenses: () -> Unit
 ) {
     val context = LocalContext.current
     val hasOverlayPerm = FloatingChessService.canDrawOverlay(context)
@@ -113,6 +134,14 @@ fun SettingsScreen(
     ) { granted ->
         if (granted) {
             onUpdateReminders(true, prefs.reminderHour, prefs.reminderMinute)
+        }
+    }
+
+    val syzygyPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris ->
+        if (uris.isNotEmpty()) {
+            onImportSyzygyFiles(uris)
         }
     }
 
@@ -142,20 +171,19 @@ fun SettingsScreen(
                         fontWeight = FontWeight.ExtraBold
                     )
                     Text(
-                        text = "اضبط المظهر والمحرك وميزات اللعب",
+                        text = "اضبط المظهر والمحرك وجداول النهايات والنافذة العائمة",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
 
-            // 1. المظهر (Appearance Card)
+            // 1. المظهر
             item {
                 SettingsSectionCard(
                     title = "المظهر",
                     icon = Icons.Rounded.Palette
                 ) {
-                    // Light / Dark / System switcher
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -164,7 +192,9 @@ fun SettingsScreen(
                             val selected = prefs.themeMode == mode
                             Surface(
                                 onClick = { onSelectThemeMode(mode) },
-                                modifier = Modifier.weight(1f),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .heightIn(min = 48.dp),
                                 shape = RoundedCornerShape(12.dp),
                                 color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
                                 border = if (selected) BorderStroke(1.dp, MaterialTheme.colorScheme.primary) else null
@@ -183,9 +213,9 @@ fun SettingsScreen(
                                     Spacer(Modifier.width(4.dp))
                                     Text(
                                         text = when (mode) {
-                                            AppThemeMode.LIGHT -> "نهاري"
-                                            AppThemeMode.DARK -> "ليلي"
-                                            AppThemeMode.SYSTEM -> "تلقائي"
+                                            AppThemeMode.LIGHT -> "فاتح"
+                                            AppThemeMode.DARK -> "داكن"
+                                            AppThemeMode.SYSTEM -> "النظام"
                                         },
                                         style = MaterialTheme.typography.labelMedium,
                                         fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
@@ -204,7 +234,6 @@ fun SettingsScreen(
                         onClick = onOpenBoardCustomization
                     )
 
-                    // Inline mini preview board + 4 color pills matching screenshot 8
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -258,15 +287,14 @@ fun SettingsScreen(
                 }
             }
 
-            // 2. محرك الشطرنج (Chess Engine & Stockfish UCI Card)
+            // 2. محرك الشطرنج (Stockfish UCI + 5 Tiers + 13 Personalities)
             item {
                 SettingsSectionCard(
-                    title = "محرك الشطرنج (ستوك فيش UCI)",
+                    title = "محرك الشطرنج (Stockfish UCI)",
                     icon = Icons.Rounded.Psychology
                 ) {
-                    // Stockfish Engine Backend Status Box
                     val isNative = stockfishStatus.isNativeStockfishReady
-                    val statusTint = if (isNative) Color(0xFF15803D) else MaterialTheme.colorScheme.primary
+                    val statusTint = if (isNative) Color(0xFF10B981) else MaterialTheme.colorScheme.primary
                     Surface(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(14.dp),
@@ -326,6 +354,7 @@ fun SettingsScreen(
                                     onClick = onRefreshStockfish,
                                     modifier = Modifier
                                         .weight(1f)
+                                        .heightIn(min = 48.dp)
                                         .testTag("refresh_stockfish_btn"),
                                     shape = RoundedCornerShape(10.dp),
                                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
@@ -338,19 +367,19 @@ fun SettingsScreen(
                                     onClick = { showStockfishHelpDialog = true },
                                     modifier = Modifier
                                         .weight(1.25f)
+                                        .heightIn(min = 48.dp)
                                         .testTag("stockfish_native_help_btn"),
                                     shape = RoundedCornerShape(10.dp),
                                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
                                 ) {
                                     Icon(Icons.Rounded.Info, contentDescription = null, modifier = Modifier.size(15.dp))
                                     Spacer(Modifier.width(4.dp))
-                                    Text("تفعيل النسخة الأصلية", style = MaterialTheme.typography.labelMedium)
+                                    Text("تفاصيل Stockfish", style = MaterialTheme.typography.labelMedium)
                                 }
                             }
                         }
                     }
 
-                    // Backend preference selector
                     Text(
                         text = "وضع تشغيل المحرك",
                         style = MaterialTheme.typography.labelMedium,
@@ -367,53 +396,77 @@ fun SettingsScreen(
                                 onClick = { onSelectEngineBackend(option) },
                                 modifier = Modifier
                                     .weight(1f)
+                                    .heightIn(min = 48.dp)
                                     .testTag("backend_option_${option.id}"),
                                 shape = RoundedCornerShape(12.dp),
                                 color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
                                 border = if (selected) BorderStroke(1.dp, MaterialTheme.colorScheme.primary) else null
                             ) {
-                                Text(
-                                    text = option.nameAr,
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                                    color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 9.dp)
-                                )
+                                Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp)) {
+                                    Text(
+                                        text = option.nameAr,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                        color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
                             }
                         }
                     }
 
-                    // Thinking time selector
+                    // 5 Ruqaa Quick Strength Tier Pills
                     Text(
-                        text = "زمن تفكير المحرك لكل نقلة",
+                        text = "المستويات الخمسة السريعة",
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
-                        listOf(
-                            400 to "سريع (0.4ث)",
-                            900 to "متوازن (0.9ث)",
-                            1800 to "عميق (1.8ث)"
-                        ).forEach { (ms, label) ->
-                            FilterChip(
-                                selected = prefs.stockfishMoveTimeMs == ms,
-                                onClick = { onSelectStockfishMoveTime(ms) },
-                                label = { Text(label, style = MaterialTheme.typography.labelSmall) },
+                        StrengthTier.entries.forEach { tier ->
+                            val active = prefs.effectiveStrengthTier == tier
+                            Surface(
+                                onClick = { onSelectStrengthTier(tier) },
                                 modifier = Modifier
                                     .weight(1f)
-                                    .testTag("movetime_chip_$ms")
-                            )
+                                    .heightIn(min = 48.dp)
+                                    .testTag("settings_tier_${tier.id}"),
+                                shape = RoundedCornerShape(10.dp),
+                                color = if (active) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                                border = if (active) BorderStroke(1.dp, MaterialTheme.colorScheme.primary) else null
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(vertical = 6.dp, horizontal = 2.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.Center
+                                ) {
+                                    Text(
+                                        text = tier.nameAr,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
+                                        color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = if (tier.targetElo <= 0) "∞" else formatArabicNumber(tier.targetElo),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
                         }
                     }
 
                     HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
+                    val eloSubtitle = if (prefs.effectiveEngineElo <= 0) {
+                        "أقصى قوة • بلا حد إيلو"
+                    } else {
+                        "${prefs.effectiveStrengthTier.nameAr} • نحو ${formatArabicNumber(prefs.effectiveEngineElo)} إيلو"
+                    }
                     SettingsNavRow(
-                        title = "قوة المحرك",
-                        subtitle = "مخصص • نحو ${prefs.customEngineElo} إيلو",
+                        title = "تخصيص قوة المحرك (منزلق إيلو)",
+                        subtitle = eloSubtitle,
                         icon = Icons.Rounded.Speed,
                         tag = "engine_elo_setting_row",
                         onClick = onOpenEngineEloDialog
@@ -421,15 +474,15 @@ fun SettingsScreen(
                     HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
                     SettingsSwitchRow(
                         title = "الأسلوب البشري",
-                        subtitle = "محاكاة تباين وتفكير البشر دون تعنت آلي بحت",
+                        subtitle = "توزيع احتمالي واقعي على المستويات المحدودة دون تعنت آلي",
                         checked = prefs.humanStyleEnabled,
                         tag = "human_style_switch",
                         onCheckedChange = onToggleHumanStyle
                     )
                     HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
                     SettingsNavRow(
-                        title = "شخصية المحرك",
-                        subtitle = "${prefs.enginePersonality.nameAr} — ${prefs.enginePersonality.descriptionAr}",
+                        title = "شخصية المحرك والشدّة والمخاطرة",
+                        subtitle = "${prefs.enginePersonality.nameAr} • شدّة ${formatArabicNumber(prefs.personalityIntensity)}٪ • ${prefs.personalityRisk.nameAr}",
                         icon = Icons.Rounded.AutoAwesome,
                         tag = "engine_personality_row",
                         onClick = onOpenPersonalitySheet
@@ -445,7 +498,95 @@ fun SettingsScreen(
                 }
             }
 
-            // 3. النافذة العائمة (Floating Window Card)
+            // 3. جداول نهايات Syzygy الاختيارية (Section 5.5)
+            item {
+                val totalBytes = remember(syzygyTables) { syzygyTables.sumOf { it.sizeBytes } }
+                val totalMbText = remember(totalBytes) {
+                    val kb = (totalBytes / 1024L).toInt()
+                    if (kb >= 1024) "${formatArabicNumber(kb / 1024)} م.ب" else "${formatArabicNumber(kb)} ك.ب"
+                }
+                SettingsSectionCard(
+                    title = "جداول نهايات Syzygy الاختيارية",
+                    icon = Icons.Rounded.Storage
+                ) {
+                    Text(
+                        text = if (syzygyTables.isEmpty()) {
+                            "لم تُستورد جداول نهايات (.rtbw / .rtbz). يمكنك استيراد حتى ١٢٨ ميجابايت من جهازك (بحد ٣٢ ميجابايت للملف)."
+                        } else {
+                            "المستورد: ${formatArabicNumber(syzygyTables.size)} ملف • الإجمالي $totalMbText (حد ١٢٨ م.ب)"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (!syzygyStatusMessage.isNullOrBlank()) {
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+                        ) {
+                            Text(
+                                text = syzygyStatusMessage,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                            )
+                        }
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = { syzygyPickerLauncher.launch(arrayOf("*/*")) },
+                            modifier = Modifier
+                                .weight(1.3f)
+                                .heightIn(min = 48.dp)
+                                .testTag("import_syzygy_btn"),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Icon(Icons.Rounded.FileOpen, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("استيراد .rtbw/.rtbz")
+                        }
+                        if (syzygyTables.isNotEmpty()) {
+                            OutlinedButton(
+                                onClick = onClearSyzygyTables,
+                                modifier = Modifier
+                                    .weight(0.9f)
+                                    .heightIn(min = 48.dp)
+                                    .testTag("clear_syzygy_btn"),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Text("مسح الكل")
+                            }
+                        }
+                    }
+                    syzygyTables.take(6).forEach { entry ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
+                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = "${entry.fileName} (${if (entry.isWdl) "WDL" else "DTZ"}) • ${formatArabicNumber((entry.sizeBytes / 1024L).toInt().coerceAtLeast(1))} ك.ب",
+                                style = MaterialTheme.typography.labelMedium,
+                                modifier = Modifier.weight(1f)
+                            )
+                            IconButton(
+                                onClick = { onDeleteSyzygyTable(entry.fileName) },
+                                modifier = Modifier.size(36.dp)
+                            ) {
+                                Icon(Icons.Rounded.DeleteOutline, contentDescription = "حذف ${entry.fileName}", modifier = Modifier.size(18.dp))
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 4. النافذة العائمة
             item {
                 SettingsSectionCard(
                     title = "النافذة العائمة",
@@ -471,7 +612,9 @@ fun SettingsScreen(
                         OutlinedButton(
                             onClick = onOpenFloatingNow,
                             shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.testTag("launch_floating_window_btn")
+                            modifier = Modifier
+                                .heightIn(min = 48.dp)
+                                .testTag("launch_floating_window_btn")
                         ) {
                             Icon(Icons.Rounded.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(Modifier.width(4.dp))
@@ -482,7 +625,7 @@ fun SettingsScreen(
                     HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
                     SettingsSwitchRow(
                         title = "إظهار تلقائي عند التصغير",
-                        subtitle = "فتح الفقاعة العائمة عند الخروج من التطبيق",
+                        subtitle = "فتح النافذة العائمة تلقائياً عند مغادرة التطبيق",
                         checked = prefs.floatingAutoShow,
                         tag = "floating_auto_show_switch",
                         onCheckedChange = onToggleFloatingAutoShow
@@ -490,7 +633,7 @@ fun SettingsScreen(
                     HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
                     SettingsNavRow(
                         title = "تخصيص النافذة العائمة",
-                        subtitle = "العرض ${prefs.floatingWidthDp}dp • ${prefs.floatingFrameShape.nameAr} • شفافية ${prefs.floatingOpacityPercent}%",
+                        subtitle = "العرض ${formatArabicNumber(prefs.floatingWidthDp)} dp • ${prefs.floatingFrameShape.nameAr} • شفافية ${formatArabicNumber(prefs.floatingOpacityPercent)}٪",
                         icon = Icons.Rounded.Tune,
                         tag = "floating_customization_row",
                         onClick = onOpenFloatingCustomization
@@ -498,7 +641,7 @@ fun SettingsScreen(
                 }
             }
 
-            // 4. الصوت والاهتزاز والتذكير اليومي
+            // 5. الصوت والاهتزاز والتنبيهات (Ruqaa Section 12)
             item {
                 SettingsSectionCard(
                     title = "الصوت والاهتزاز والتنبيهات",
@@ -506,19 +649,66 @@ fun SettingsScreen(
                 ) {
                     SettingsSwitchRow(
                         title = "المؤثرات الصوتية",
-                        subtitle = "أصوات النقلات والأسر والكش والفوز",
+                        subtitle = "٣ طوابع (ناعم، خشبي، رقمي) لكل أحداث اللعب",
                         checked = prefs.soundEnabled,
                         tag = "sound_switch",
                         onCheckedChange = onToggleSound
                     )
+                    if (prefs.soundEnabled) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            SoundProfile.entries.forEach { sp ->
+                                FilterChip(
+                                    selected = prefs.soundProfile == sp,
+                                    onClick = { onSelectSoundProfile(sp) },
+                                    label = { Text(sp.nameAr) },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("sound_profile_${sp.id}")
+                                )
+                            }
+                        }
+                        Text(
+                            text = "مستوى الصوت: ${formatArabicNumber(prefs.soundVolume)}٪",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Slider(
+                            value = prefs.soundVolume.toFloat(),
+                            onValueChange = { onChangeSoundVolume(it.roundToInt().coerceIn(0, 100)) },
+                            valueRange = 0f..100f,
+                            modifier = Modifier.testTag("sound_volume_slider")
+                        )
+                    }
+
                     HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
                     SettingsSwitchRow(
                         title = "الاهتزاز التفاعلي",
-                        subtitle = "استجابة لمسية عند تحريك القطع",
+                        subtitle = "نمط نبضات مخصص للنقلة والأسر والتبييت والكش والنهاية",
                         checked = prefs.hapticsEnabled,
                         tag = "haptics_switch",
                         onCheckedChange = onToggleHaptics
                     )
+                    if (prefs.hapticsEnabled) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            VibrationStyle.entries.forEach { vs ->
+                                FilterChip(
+                                    selected = prefs.vibrationStyle == vs,
+                                    onClick = { onSelectVibrationStyle(vs) },
+                                    label = { Text(vs.nameAr) },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("vibration_style_${vs.level}")
+                                )
+                            }
+                        }
+                    }
+
                     HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
                     SettingsSwitchRow(
                         title = "التذكير اليومي الذكي",
@@ -542,7 +732,7 @@ fun SettingsScreen(
                         }
                     )
                     if (prefs.remindersEnabled) {
-                        val times = listOf(9 to "9:00 ص", 16 to "4:00 م", 19 to "7:00 م", 21 to "9:00 م")
+                        val times = listOf(9 to "٩:٠٠ ص", 16 to "٤:٠٠ م", 19 to "٧:٠٠ م", 21 to "٩:٠٠ م")
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             times.forEach { (hr, label) ->
                                 FilterChip(
@@ -566,7 +756,9 @@ fun SettingsScreen(
                                 onTestNotification()
                             }
                         },
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp)
                     ) {
                         Icon(Icons.Rounded.NotificationsActive, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(6.dp))
@@ -575,7 +767,7 @@ fun SettingsScreen(
                 }
             }
 
-            // 5. المراجعة والتلميحات (Review & Hints Card)
+            // 6. المراجعة والتلميحات
             item {
                 SettingsSectionCard(
                     title = "المراجعة والتلميحات",
@@ -591,23 +783,29 @@ fun SettingsScreen(
                 }
             }
 
-            // 6. حول التطبيق والتراخيص (About & Licenses)
+            // 7. حول رُقعة والتراخيص
             item {
                 SettingsSectionCard(
-                    title = "حول التطبيق والتراخيص",
+                    title = "حول رُقعة والتراخيص",
                     icon = Icons.Rounded.Info
                 ) {
                     Text(
-                        text = "أرينا الشطرنج • محرك تحليل وتدريب ذكي يعمل 100% بدون إنترنت.",
+                        text = "رُقعة (Ruqaa) • الإصدار ٣.٢.٣ — شطرنج عربي متكامل يعمل ١٠٠٪ دون إنترنت.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    Text(
-                        text = "الإصدار 2.0 • يدعم بروتوكول UCI لمحرك Stockfish و PGN / FEN والنافذة العائمة",
-                        fontFamily = MonoFontFamily,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary
-                    )
+                    OutlinedButton(
+                        onClick = onOpenAboutLicenses,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp)
+                            .testTag("open_about_licenses_btn"),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(Icons.Rounded.Info, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("عرض تراخيص Stockfish GPLv3 والمؤلفين وخط IBM Plex")
+                    }
                 }
             }
         }
@@ -618,17 +816,14 @@ fun SettingsScreen(
             onDismissRequest = { showStockfishHelpDialog = false },
             title = {
                 Text(
-                    text = "تفعيل محرك Stockfish C++ الأصلي",
+                    text = "بنية محرك Stockfish UCI",
                     fontWeight = FontWeight.Bold
                 )
             },
             text = {
                 Text(
-                    text = "يدعم التطبيق بروتوكول UCI الكامل لمحرك Stockfish (بما في ذلك Skill Level و UCI_Elo والخيوط المتعددة).\n\n" +
-                        "بسبب عدم توزيع ملفات Stockfish C++ المترجمة (.so) وأوزان NNUE على المستودعات الجاهزة، يعمل التطبيق افتراضياً بالمحرك المدمج المتطور (Zobrist TT + PVS + Null-Move + LMR) بدون إنترنت.\n\n" +
-                        "لتشغيل النسخة الأصلية من Stockfish NNUE:\n" +
-                        "• عند تصدير المشروع، ضع ملف libstockfish.so المترجم لمعمارية arm64-v8a داخل مجلد jniLibs/arm64-v8a/.\n" +
-                        "• أو ثبّت تطبيق محرك Open Exchange يدعم UCI وسيتم اكتشافه تلقائياً.",
+                    text = "يدعم التطبيق بروتوكول UCI الكامل لمحرك Stockfish مع إدارة خيط واحد مخصّص ومهل انتظار دقيقة (٤٥ ثانية للبدء، ٢٠ ثانية للاستعداد، وذاكرة Hash ٣٢ ميجابايت).\n\n" +
+                        "عند بناء الحزمة عبر GitHub Actions تُدمج مكتبات arm64-v8a و x86_64، وفي بيئات المعاينة يعمل المحرك الاحتياطي المدمج تلقائياً بنفس صيغ الإيلو والشخصيات الـ ١٣.",
                     style = MaterialTheme.typography.bodyMedium
                 )
             },
@@ -691,6 +886,7 @@ private fun SettingsNavRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .heightIn(min = 48.dp)
             .clip(RoundedCornerShape(12.dp))
             .clickable(onClick = onClick)
             .padding(vertical = 6.dp, horizontal = 4.dp)
@@ -754,7 +950,7 @@ private fun ThemeSwatchPill(
 ) {
     Surface(
         onClick = onClick,
-        modifier = modifier,
+        modifier = modifier.heightIn(min = 48.dp),
         shape = RoundedCornerShape(12.dp),
         color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
         border = BorderStroke(

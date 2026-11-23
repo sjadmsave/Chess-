@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -47,7 +48,7 @@ import com.example.data.SavedGameEntity
 import com.example.data.UserPreferences
 import com.example.data.formatOpponentTitle
 import com.example.ui.components.MiniBoardThumbnail
-import com.example.ui.theme.MonoFontFamily
+import com.example.ui.theme.formatArabicNumber
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -67,7 +68,7 @@ fun ArchiveScreen(
     onDeleteGame: (Long) -> Unit
 ) {
     var selectedFilter by remember { mutableStateOf(ArchiveFilter.ALL) }
-    val dateFormat = remember { SimpleDateFormat("dd MMM • HH:mm", Locale("ar")) }
+    val dateFormat = remember { SimpleDateFormat("dd MMM • HH:mm", Locale.forLanguageTag("ar-IQ")) }
 
     val filteredGames = remember(allGames, selectedFilter) {
         when (selectedFilter) {
@@ -85,7 +86,6 @@ fun ArchiveScreen(
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 104.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // Header row matching screenshot 5: title on start, "إحصاءاتك" pill on end
             item {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -100,7 +100,7 @@ fun ArchiveScreen(
                             color = MaterialTheme.colorScheme.onBackground
                         )
                         Text(
-                            text = "سجل مبارياتك المحفوظة والمكتملة",
+                            text = "المباريات المحفوظة والمكتملة",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -110,7 +110,9 @@ fun ArchiveScreen(
                         onClick = onOpenStats,
                         shape = RoundedCornerShape(14.dp),
                         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-                        modifier = Modifier.testTag("archive_stats_button")
+                        modifier = Modifier
+                            .heightIn(min = 48.dp)
+                            .testTag("archive_stats_button")
                     ) {
                         Icon(
                             imageVector = Icons.Rounded.BarChart,
@@ -124,7 +126,6 @@ fun ArchiveScreen(
                 }
             }
 
-            // Filter Chips: الكل / مفتوحة / مكتملة
             item {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     ArchiveFilter.entries.forEach { filter ->
@@ -141,15 +142,18 @@ fun ArchiveScreen(
                                 1.dp,
                                 if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
                             ),
-                            modifier = Modifier.testTag("archive_filter_${filter.name.lowercase()}")
+                            modifier = Modifier
+                                .heightIn(min = 48.dp)
+                                .testTag("archive_filter_${filter.name.lowercase()}")
                         ) {
-                            Text(
-                                text = filter.labelAr,
-                                style = MaterialTheme.typography.labelLarge,
-                                fontWeight = FontWeight.Bold,
-                                color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 9.dp)
-                            )
+                            Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 16.dp, vertical = 9.dp)) {
+                                Text(
+                                    text = filter.labelAr,
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
+                                )
+                            }
                         }
                     }
                 }
@@ -262,11 +266,14 @@ fun ArchiveScreen(
 
                                     if (game.isCompleted) {
                                         Text(
-                                            text = "دقة ${game.playerAccuracy}%",
-                                            fontFamily = MonoFontFamily,
+                                            text = if (game.reviewCompleted) {
+                                                "دقة ${formatArabicNumber(game.playerAccuracy)}٪"
+                                            } else {
+                                                "تحليل غير مكتمل"
+                                            },
                                             style = MaterialTheme.typography.labelSmall,
                                             fontWeight = FontWeight.Bold,
-                                            color = MaterialTheme.colorScheme.primary
+                                            color = if (game.reviewCompleted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                                         )
                                     }
                                 }
@@ -279,7 +286,7 @@ fun ArchiveScreen(
                                     overflow = TextOverflow.Ellipsis
                                 )
                                 Text(
-                                    text = "${game.openingNameAr} • ${game.moveCount} نقلة • ${dateFormat.format(Date(game.updatedAt))}",
+                                    text = "${game.openingNameAr} • ${formatArabicNumber(game.moveCount)} نقلة • ${dateFormat.format(Date(game.updatedAt))}",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     maxLines = 1,
@@ -289,7 +296,7 @@ fun ArchiveScreen(
 
                             IconButton(
                                 onClick = { onDeleteGame(game.id) },
-                                modifier = Modifier.size(36.dp)
+                                modifier = Modifier.size(48.dp)
                             ) {
                                 Icon(
                                     imageVector = Icons.Outlined.DeleteOutline,
