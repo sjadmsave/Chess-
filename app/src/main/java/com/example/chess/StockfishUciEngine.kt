@@ -60,40 +60,122 @@ object StockfishUciEngine {
     )
 
     private val uciMutex = Mutex()
-    private var activeProcess: Process? = null
-    private var activeWriter: BufferedWriter? = null
-    private var activeReader: BufferedReader? = null
-    private var activeBinaryPath: String? = null
-    private var detectedEngineName: String? = null
+    private val nnueCopyLock = Any()
+    private const val EXPECTED_DEFAULT_NNUE_NAME = "nn-1a298aa575a0.nnue"
+    private const val EXPECTED_DEFAULT_NNUE_BYTES = 98_511_183L
+
+    @Volatile private var activeProcess: Process? = null
+    @Volatile private var activeWriter: BufferedWriter? = null
+    @Volatile private var activeReader: BufferedReader? = null
+    @Volatile private var activeBinaryPath: String? = null
+    @Volatile private var detectedEngineName: String? = null
+    @Volatile private var cachedProbeResult: StockfishProbeResult? = null
     private var lastSessionId: String? = null
     private var lastConfiguredElo: Int? = null
+    private var lastConfiguredThreads: Int = 2
+    private var lastConfiguredHashMb: Int = 32
     private var syzygyDisabledForSession: Boolean = false
 
     fun resetSyzygyFallbackFlag() {
         syzygyDisabledForSession = false
     }
 
-    fun probeAvailableEngines(context: Context): StockfishProbeResult {
+    private fun findNativeBinary(context: Context): File? {
         val nativeDir = File(context.applicationInfo.nativeLibraryDir)
-        val bundledBinary = CANDIDATE_SO_NAMES
+        if (!nativeDir.exists()) return null
+        val candidate = CANDIDATE_SO_NAMES
             .map { File(nativeDir, it) }
-            .firstOrNull { it.exists() && it.canExecute() }
+            .firstOrNull { it.exists() }
             ?: nativeDir.listFiles()?.firstOrNull {
-                it.name.contains("stockfish", ignoreCase = true) && it.canExecute()
+                it.isFile && it.name.contains("stockfish", ignoreCase = true)
             }
+        if (candidate != null && !candidate.canExecute()) {
+            runCatching { candidate.setExecutable(true, false) }
+        }
+        return candidate?.takeIf { it.exists() && it.canExecute() }
+    }
 
+    /**
+     * Fast non-blocking initial inspection safe to call on startup before Dispatchers.IO warmup.
+     */
+    fun quickInspectStatic(context: Context): StockfishProbeResult {
+        cachedProbeResult?.let { return it }
+        val bundledBinary = findNativeBinary(context)
         val oexList = queryOexProviders(context)
-
-        return if (bundledBinary != null) {
-            val probedName = quickIdentifyUciName(bundledBinary) ?: "Stockfish Native UCI"
-            StockfishProbeResult(
+        return when {
+            bundledBinary != null -> StockfishProbeResult(
                 backend = ActiveEngineBackend.NATIVE_STOCKFISH,
-                engineName = probedName,
+                engineName = detectedEngineName ?: "Stockfish 19 NNUE",
                 isNativeStockfishReady = true,
                 nativeBinaryPath = bundledBinary.absolutePath,
                 oexEngines = oexList,
-                diagnosticMessageAr = "محرك ستوك فيش الأصلي متصل وجاهز ($probedName)"
+                diagnosticMessageAr = "جاري تهيئة محرك ستوك فيش الأصلي..."
             )
+            oexList.isNotEmpty() -> {
+                val firstOex = oexList.first()
+                StockfishProbeResult(
+                    backend = ActiveEngineBackend.OEX_STOCKFISH,
+                    engineName = firstOex.label,
+                    isNativeStockfishReady = false,
+                    nativeBinaryPath = null,
+                    oexEngines = oexList,
+                    diagnosticMessageAr = "تم رصد محرك خارجي (${firstOex.label}). يعمل المحرك المدمج مع جاهزية OEX."
+                )
+            }
+            else -> StockfishProbeResult(
+                backend = ActiveEngineBackend.BUILTIN_FALLBACK,
+                engineName = "محرك رُقعة المدمج (TT + PVS + LMR)",
+                isNativeStockfishReady = false,
+                nativeBinaryPath = null,
+                oexEngines = emptyList(),
+                diagnosticMessageAr = "لم يتم العثور على libstockfish.so؛ يعمل المحرك المدمج المتطور تلقائياً."
+            )
+        }
+    }
+
+    /**
+     * Extracts bundled NNUE weights on IO thread and performs a real UCI handshake probe.
+     */
+    suspend fun warmupAndProbe(context: Context): StockfishProbeResult = withContext(Dispatchers.IO) {
+        ensureBundledNnueCopied(context)
+        probeAvailableEngines(context, forceRefresh = true)
+    }
+
+    fun probeAvailableEngines(context: Context, forceRefresh: Boolean = false): StockfishProbeResult {
+        if (!forceRefresh) {
+            cachedProbeResult?.let { return it }
+        }
+
+        val bundledBinary = findNativeBinary(context)
+        val oexList = queryOexProviders(context)
+
+        val result = if (bundledBinary != null) {
+            val (probedName, execError) = quickIdentifyUciName(bundledBinary)
+            if (!probedName.isNullOrBlank()) {
+                detectedEngineName = probedName
+                val nnueReady = hasBundledOrExtractedNnue(context)
+                StockfishProbeResult(
+                    backend = ActiveEngineBackend.NATIVE_STOCKFISH,
+                    engineName = probedName,
+                    isNativeStockfishReady = true,
+                    nativeBinaryPath = bundledBinary.absolutePath,
+                    oexEngines = oexList,
+                    diagnosticMessageAr = if (nnueReady) {
+                        "محرك ستوك فيش الأصلي متصل وجاهز ($probedName • NNUE)"
+                    } else {
+                        "محرك ستوك فيش الأصلي متصل وجاهز ($probedName)"
+                    }
+                )
+            } else {
+                StockfishProbeResult(
+                    backend = ActiveEngineBackend.BUILTIN_FALLBACK,
+                    engineName = "محرك رُقعة المدمج (TT + PVS + LMR)",
+                    isNativeStockfishReady = false,
+                    nativeBinaryPath = null,
+                    oexEngines = oexList,
+                    diagnosticMessageAr = "تم العثور على ${bundledBinary.name} لكن تعذّر تشغيله (${execError ?: "خطأ UCI"})؛ يعمل المحرك المدمج احتياطياً."
+                )
+            }
         } else if (oexList.isNotEmpty()) {
             val firstOex = oexList.first()
             StockfishProbeResult(
@@ -114,6 +196,9 @@ object StockfishUciEngine {
                 diagnosticMessageAr = "لم يتم العثور على libstockfish.so؛ يعمل المحرك المدمج المتطور تلقائياً."
             )
         }
+
+        cachedProbeResult = result
+        return result
     }
 
     private fun queryOexProviders(context: Context): List<OexEngineInfo> {
@@ -132,9 +217,10 @@ object StockfishUciEngine {
         }.getOrDefault(emptyList())
     }
 
-    private fun quickIdentifyUciName(binary: File): String? {
-        return runCatching {
-            val proc = ProcessBuilder(binary.absolutePath)
+    private fun quickIdentifyUciName(binary: File): Pair<String?, String?> {
+        var proc: Process? = null
+        return try {
+            proc = ProcessBuilder(binary.absolutePath)
                 .directory(binary.parentFile)
                 .redirectErrorStream(true)
                 .start()
@@ -143,36 +229,79 @@ object StockfishUciEngine {
             writer.write("uci\n")
             writer.flush()
             var engineName: String? = null
-            val deadline = System.currentTimeMillis() + 1200L
+            var uciOk = false
+            val deadline = System.currentTimeMillis() + 3000L
             while (System.currentTimeMillis() < deadline) {
                 if (reader.ready()) {
                     val line = reader.readLine() ?: break
                     if (line.startsWith("id name ")) {
                         engineName = line.removePrefix("id name ").trim()
                     } else if (line.trim() == "uciok") {
+                        uciOk = true
                         break
                     }
                 } else {
+                    val exited = runCatching { proc.exitValue(); true }.getOrDefault(false)
+                    if (exited) break
                     Thread.sleep(10)
                 }
             }
-            writer.write("quit\n")
-            writer.flush()
-            proc.destroy()
-            engineName
-        }.getOrNull()
+            runCatching {
+                writer.write("quit\n")
+                writer.flush()
+            }
+            runCatching { writer.close() }
+            runCatching { reader.close() }
+            runCatching { proc.waitFor(250, java.util.concurrent.TimeUnit.MILLISECONDS) }
+            runCatching { proc.destroyForcibly() }
+            if (uciOk && !engineName.isNullOrBlank()) {
+                engineName to null
+            } else {
+                (engineName?.takeIf { uciOk }) to "لم يستجب المحرك لـ uciok"
+            }
+        } catch (t: Throwable) {
+            runCatching { proc?.destroyForcibly() }
+            null to (t.message ?: t.javaClass.simpleName)
+        }
     }
 
-    private fun ensureBundledNnueCopied(context: Context): String? {
+    private fun hasBundledOrExtractedNnue(context: Context): Boolean {
+        val target = File(context.filesDir, EXPECTED_DEFAULT_NNUE_NAME)
+        if (target.exists() && target.length() == EXPECTED_DEFAULT_NNUE_BYTES) return true
         return runCatching {
-            val nnueAsset = context.assets.list("")?.firstOrNull { it.endsWith(".nnue") } ?: return@runCatching null
+            context.assets.list("")?.any { it.endsWith(".nnue") } == true
+        }.getOrDefault(false)
+    }
+
+    private fun ensureBundledNnueCopied(context: Context): String? = synchronized(nnueCopyLock) {
+        return runCatching {
+            val nnueAsset = context.assets.list("")?.firstOrNull { it.endsWith(".nnue") }
+                ?: return@runCatching null
             val target = File(context.filesDir, nnueAsset)
-            if (target.exists() && target.length() > 1024L) {
+            val expectedLength = runCatching {
+                context.assets.openFd(nnueAsset).use { it.length }
+            }.getOrNull() ?: if (nnueAsset == EXPECTED_DEFAULT_NNUE_NAME) EXPECTED_DEFAULT_NNUE_BYTES else null
+
+            val isAlreadyValid = target.exists() && (
+                (expectedLength != null && expectedLength > 0L && target.length() == expectedLength) ||
+                    (expectedLength == null && target.length() > 50_000_000L)
+                )
+            if (isAlreadyValid) {
                 return@runCatching target.absolutePath
             }
+
             val tmp = File(context.filesDir, "$nnueAsset.tmp")
+            if (tmp.exists()) tmp.delete()
             context.assets.open(nnueAsset).use { input ->
-                tmp.outputStream().use { out -> input.copyTo(out) }
+                tmp.outputStream().use { out ->
+                    val buffer = ByteArray(128 * 1024)
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read < 0) break
+                        out.write(buffer, 0, read)
+                    }
+                    out.flush()
+                }
             }
             if (target.exists()) target.delete()
             if (tmp.renameTo(target)) target.absolutePath else null
@@ -188,6 +317,8 @@ object StockfishUciEngine {
         humanStyle: Boolean,
         moveTimeMs: Int,
         threads: Int,
+        hashMb: Int = 32,
+        powerSavingMode: Boolean = false,
         personalityIntensity: Int = 50,
         personalityRisk: PersonalityRisk = PersonalityRisk.BALANCED,
         sessionId: String = "match",
@@ -225,9 +356,10 @@ object StockfishUciEngine {
             }
         }
 
+        val rawCapMs = if (powerSavingMode) min(420, effectiveMoveTimeMs) else effectiveMoveTimeMs
         if (backendPreference == EngineBackendPreference.STOCKFISH_AUTO && context != null) {
-            val probe = probeAvailableEngines(context)
-            if (probe.nativeBinaryPath != null) {
+            val nativeBinary = findNativeBinary(context)
+            if (nativeBinary != null) {
                 val multiPvCount = when {
                     personality != EnginePersonality.CLASSIC && personalityIntensity > 0 -> 6
                     humanStyle && targetElo > 0 -> 4
@@ -235,12 +367,13 @@ object StockfishUciEngine {
                 }
                 val candidates = queryNativeMultiPv(
                     context = context,
-                    binaryPath = probe.nativeBinaryPath,
+                    binaryPath = nativeBinary.absolutePath,
                     state = state,
                     targetElo = targetElo,
                     multiPv = multiPvCount,
-                    moveTimeMs = effectiveMoveTimeMs,
-                    threads = threads,
+                    moveTimeMs = rawCapMs,
+                    threads = if (powerSavingMode) 1 else threads,
+                    hashMb = hashMb,
                     nodeCap = ChessEngine.computeNodeCap(targetElo),
                     sessionId = sessionId
                 )
@@ -256,7 +389,7 @@ object StockfishUciEngine {
                         gameSeed = gameSeed,
                         lastMoveFromWing = lastMoveFromWing,
                         lastMovedPieceType = lastMovedPieceType,
-                        sourceLabel = detectedEngineName ?: "Stockfish UCI"
+                        sourceLabel = detectedEngineName ?: "Stockfish 19 UCI"
                     )
                 }
             }
@@ -288,8 +421,8 @@ object StockfishUciEngine {
     ): ChessEngine.SearchResult = withContext(Dispatchers.Default) {
         val elo = adaptivePlayerElo ?: bot.elo
         if (backendPreference == EngineBackendPreference.STOCKFISH_AUTO && context != null) {
-            val probe = probeAvailableEngines(context)
-            if (probe.nativeBinaryPath != null) {
+            val nativeBinary = findNativeBinary(context)
+            if (nativeBinary != null) {
                 val mappedPersonality = when {
                     bot.aggressionWeight >= 1.25f -> EnginePersonality.SACRIFICE_KING
                     bot.aggressionWeight <= 0.90f -> EnginePersonality.IRON_FORTRESS
@@ -297,7 +430,7 @@ object StockfishUciEngine {
                 }
                 val candidates = queryNativeMultiPv(
                     context = context,
-                    binaryPath = probe.nativeBinaryPath,
+                    binaryPath = nativeBinary.absolutePath,
                     state = state,
                     targetElo = elo,
                     multiPv = 4,
@@ -315,7 +448,7 @@ object StockfishUciEngine {
                         humanStyle = true,
                         personalityIntensity = 50,
                         personalityRisk = PersonalityRisk.BALANCED,
-                        sourceLabel = detectedEngineName ?: "Stockfish UCI"
+                        sourceLabel = detectedEngineName ?: "Stockfish 19 UCI"
                     )
                 }
             }
@@ -331,11 +464,11 @@ object StockfishUciEngine {
         threads: Int = 2
     ): ChessEngine.SearchResult = withContext(Dispatchers.Default) {
         if (backendPreference == EngineBackendPreference.STOCKFISH_AUTO && context != null) {
-            val probe = probeAvailableEngines(context)
-            if (probe.nativeBinaryPath != null) {
+            val nativeBinary = findNativeBinary(context)
+            if (nativeBinary != null) {
                 val candidates = queryNativeMultiPv(
                     context = context,
-                    binaryPath = probe.nativeBinaryPath,
+                    binaryPath = nativeBinary.absolutePath,
                     state = state,
                     targetElo = -1,
                     multiPv = 1,
@@ -370,22 +503,28 @@ object StockfishUciEngine {
         backendPreference: EngineBackendPreference,
         multiPv: Int = 3,
         moveTimeMs: Int = 1700,
+        threads: Int = 2,
+        hashMb: Int = 32,
+        powerSavingMode: Boolean = false,
         sessionId: String = "analysis"
     ): List<MultiPvLine> = withContext(Dispatchers.Default) {
         val legal = state.generateLegalMoves()
         if (legal.isEmpty()) return@withContext emptyList()
+        val effMs = if (powerSavingMode) min(650, moveTimeMs) else moveTimeMs
+        val effThreads = if (powerSavingMode) 1 else threads
 
         if (backendPreference == EngineBackendPreference.STOCKFISH_AUTO && context != null) {
-            val probe = probeAvailableEngines(context)
-            if (probe.nativeBinaryPath != null) {
+            val nativeBinary = findNativeBinary(context)
+            if (nativeBinary != null) {
                 val candidates = queryNativeMultiPv(
                     context = context,
-                    binaryPath = probe.nativeBinaryPath,
+                    binaryPath = nativeBinary.absolutePath,
                     state = state,
                     targetElo = -1,
                     multiPv = multiPv.coerceIn(1, 6),
-                    moveTimeMs = moveTimeMs,
-                    threads = 2,
+                    moveTimeMs = effMs,
+                    threads = effThreads,
+                    hashMb = hashMb,
                     nodeCap = null,
                     sessionId = sessionId
                 )
@@ -420,33 +559,17 @@ object StockfishUciEngine {
         multiPv: Int,
         moveTimeMs: Int,
         threads: Int,
+        hashMb: Int = 32,
         nodeCap: Int? = null,
         maxDepth: Int? = null,
         sessionId: String = "default"
-    ): List<ChessEngine.CandidateMoveEval>? = uciMutex.withLock {
-        val legal = state.generateLegalMoves()
-        if (legal.isEmpty()) return@withLock null
+    ): List<ChessEngine.CandidateMoveEval>? = withContext(Dispatchers.IO) {
+        uciMutex.withLock {
+            val legal = state.generateLegalMoves()
+            if (legal.isEmpty()) return@withLock null
 
-        val useSyzygy = !syzygyDisabledForSession && SyzygyManager.hasWdlTables(context)
-        val result = runNativeUciQuery(
-            context = context,
-            binaryPath = binaryPath,
-            state = state,
-            legal = legal,
-            targetElo = targetElo,
-            multiPv = multiPv,
-            moveTimeMs = moveTimeMs,
-            threads = threads,
-            nodeCap = nodeCap,
-            maxDepth = maxDepth,
-            sessionId = sessionId,
-            enableSyzygy = useSyzygy
-        )
-        if (result == null && useSyzygy) {
-            // Auto-restart without Syzygy per Ruqaa Section 5.2
-            syzygyDisabledForSession = true
-            closeSession()
-            return@withLock runNativeUciQuery(
+            val useSyzygy = !syzygyDisabledForSession && SyzygyManager.hasWdlTables(context)
+            val result = runNativeUciQuery(
                 context = context,
                 binaryPath = binaryPath,
                 state = state,
@@ -455,13 +578,33 @@ object StockfishUciEngine {
                 multiPv = multiPv,
                 moveTimeMs = moveTimeMs,
                 threads = threads,
+                hashMb = hashMb,
                 nodeCap = nodeCap,
                 maxDepth = maxDepth,
                 sessionId = sessionId,
-                enableSyzygy = false
+                enableSyzygy = useSyzygy
             )
+            if (result == null && useSyzygy) {
+                syzygyDisabledForSession = true
+                closeSession()
+                return@withLock runNativeUciQuery(
+                    context = context,
+                    binaryPath = binaryPath,
+                    state = state,
+                    legal = legal,
+                    targetElo = targetElo,
+                    multiPv = multiPv,
+                    moveTimeMs = moveTimeMs,
+                    threads = threads,
+                    hashMb = hashMb,
+                    nodeCap = nodeCap,
+                    maxDepth = maxDepth,
+                    sessionId = sessionId,
+                    enableSyzygy = false
+                )
+            }
+            return@withLock result
         }
-        return@withLock result
     }
 
     private fun runNativeUciQuery(
@@ -473,15 +616,28 @@ object StockfishUciEngine {
         multiPv: Int,
         moveTimeMs: Int,
         threads: Int,
+        hashMb: Int,
         nodeCap: Int?,
         maxDepth: Int?,
         sessionId: String,
         enableSyzygy: Boolean
     ): List<ChessEngine.CandidateMoveEval>? {
         return runCatching {
-            ensureSession(context, binaryPath, threads, enableSyzygy)
+            ensureSession(context, binaryPath, threads, hashMb, enableSyzygy)
             val writer = activeWriter ?: return@runCatching null
             val reader = activeReader ?: return@runCatching null
+
+            val cpuCores = Runtime.getRuntime().availableProcessors().coerceAtLeast(1)
+            val safeThreads = threads.coerceIn(1, min(4, cpuCores))
+            val safeHash = hashMb.coerceIn(16, 256)
+            if (safeThreads != lastConfiguredThreads) {
+                sendUciLine(writer, "setoption name Threads value $safeThreads")
+                lastConfiguredThreads = safeThreads
+            }
+            if (safeHash != lastConfiguredHashMb) {
+                sendUciLine(writer, "setoption name Hash value $safeHash")
+                lastConfiguredHashMb = safeHash
+            }
 
             if (sessionId != lastSessionId) {
                 sendUciLine(writer, "ucinewgame")
@@ -496,12 +652,12 @@ object StockfishUciEngine {
             sendUciLine(writer, "setoption name Skill Level value 20")
             sendUciLine(writer, "setoption name UCI_LimitStrength value ${if (limited) "true" else "false"}")
             if (limited) {
-                sendUciLine(writer, "setoption name UCI_Elo value ${max(1320, targetElo)}")
+                sendUciLine(writer, "setoption name UCI_Elo value ${targetElo.coerceIn(1320, 3190)}")
             }
             val safeMultiPv = multiPv.coerceIn(1, min(6, legal.size))
             sendUciLine(writer, "setoption name MultiPV value $safeMultiPv")
             sendUciLine(writer, "isready")
-            waitForToken(reader, "readyok", 20_000L)
+            check(waitForToken(reader, "readyok", 20_000L)) { "Stockfish did not answer readyok" }
 
             sendUciLine(writer, "position fen ${state.toFen()}")
             val safeMs = moveTimeMs.coerceIn(80, 5000)
@@ -531,6 +687,10 @@ object StockfishUciEngine {
                 }
             }
 
+            if (bestMoveStr == null) {
+                throw IllegalStateException("Stockfish terminated without bestmove")
+            }
+
             // Pick deepest depth that collected at least as many PV lines or highest depth overall
             val deepestCompleted = byDepth.entries
                 .filter { it.value.size >= safeMultiPv }
@@ -556,7 +716,7 @@ object StockfishUciEngine {
                 )
             }
 
-            if (candidates.isEmpty() && bestMoveStr != null) {
+            if (candidates.isEmpty()) {
                 val matched = legal.find { it.toUci().equals(bestMoveStr, ignoreCase = true) }
                 if (matched != null) {
                     candidates.add(
@@ -582,6 +742,7 @@ object StockfishUciEngine {
         context: Context,
         binaryPath: String,
         threads: Int,
+        hashMb: Int,
         enableSyzygy: Boolean
     ) {
         if (activeProcess != null && activeBinaryPath == binaryPath) {
@@ -590,6 +751,7 @@ object StockfishUciEngine {
         }
         closeSession()
         val file = File(binaryPath)
+        val nnuePath = ensureBundledNnueCopied(context)
         val proc = ProcessBuilder(file.absolutePath)
             .directory(context.filesDir)
             .redirectErrorStream(true)
@@ -598,23 +760,32 @@ object StockfishUciEngine {
         val reader = BufferedReader(InputStreamReader(proc.inputStream))
 
         sendUciLine(writer, "uci")
+        var uciOk = false
         val deadline = System.currentTimeMillis() + 45_000L
         while (System.currentTimeMillis() < deadline) {
             val line = reader.readLine() ?: break
             if (line.startsWith("id name ")) {
                 detectedEngineName = line.removePrefix("id name ").trim()
             } else if (line.trim() == "uciok") {
+                uciOk = true
                 break
             }
         }
+        if (!uciOk) {
+            runCatching { proc.destroyForcibly() }
+            throw IllegalStateException("Stockfish uci handshake timed out")
+        }
 
         val cpuCores = Runtime.getRuntime().availableProcessors().coerceAtLeast(1)
-        val boundedThreads = max(1, min(2, min(cpuCores, threads.coerceAtLeast(1))))
+        val boundedThreads = max(1, min(4, min(cpuCores, threads.coerceAtLeast(1))))
+        val boundedHash = hashMb.coerceIn(16, 256)
         sendUciLine(writer, "setoption name Threads value $boundedThreads")
-        sendUciLine(writer, "setoption name Hash value 32")
+        sendUciLine(writer, "setoption name Hash value $boundedHash")
+        lastConfiguredThreads = boundedThreads
+        lastConfiguredHashMb = boundedHash
 
-        ensureBundledNnueCopied(context)?.let { evalPath ->
-            sendUciLine(writer, "setoption name EvalFile value $evalPath")
+        if (nnuePath != null) {
+            sendUciLine(writer, "setoption name EvalFile value $nnuePath")
         }
 
         if (enableSyzygy && SyzygyManager.hasWdlTables(context)) {
@@ -624,7 +795,10 @@ object StockfishUciEngine {
         }
 
         sendUciLine(writer, "isready")
-        waitForToken(reader, "readyok", 20_000L)
+        if (!waitForToken(reader, "readyok", 20_000L)) {
+            runCatching { proc.destroyForcibly() }
+            throw IllegalStateException("Stockfish readyok timed out")
+        }
 
         activeProcess = proc
         activeWriter = writer
@@ -640,12 +814,13 @@ object StockfishUciEngine {
         writer.flush()
     }
 
-    private fun waitForToken(reader: BufferedReader, expected: String, timeoutMs: Long) {
+    private fun waitForToken(reader: BufferedReader, expected: String, timeoutMs: Long): Boolean {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
-            val line = reader.readLine() ?: break
-            if (line.trim() == expected) return
+            val line = reader.readLine() ?: return false
+            if (line.trim() == expected) return true
         }
+        return false
     }
 
     fun closeSession() {

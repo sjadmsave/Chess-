@@ -13,6 +13,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -26,6 +28,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.ChevronLeft
@@ -37,12 +40,12 @@ import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.LightMode
 import androidx.compose.material.icons.rounded.Memory
 import androidx.compose.material.icons.rounded.NotificationsActive
-import androidx.compose.material.icons.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.PictureInPictureAlt
 import androidx.compose.material.icons.rounded.Psychology
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Speed
+import androidx.compose.material.icons.rounded.SportsEsports
 import androidx.compose.material.icons.rounded.Storage
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.AlertDialog
@@ -77,6 +80,7 @@ import androidx.core.content.ContextCompat
 import com.example.chess.BoardTheme
 import com.example.chess.ChessBoardState
 import com.example.chess.EngineBackendPreference
+import com.example.chess.EvalBarPosition
 import com.example.chess.SoundProfile
 import com.example.chess.StockfishProbeResult
 import com.example.chess.StrengthTier
@@ -89,6 +93,7 @@ import com.example.ui.theme.AppThemeMode
 import com.example.ui.theme.formatArabicNumber
 import kotlin.math.roundToInt
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SettingsScreen(
     prefs: UserPreferences,
@@ -111,6 +116,7 @@ fun SettingsScreen(
     onOpenFloatingCustomization: () -> Unit,
     onToggleSound: (Boolean) -> Unit,
     onSelectSoundProfile: (SoundProfile) -> Unit,
+    onPreviewSoundProfile: (SoundProfile) -> Unit = {},
     onChangeSoundVolume: (Int) -> Unit,
     onToggleHaptics: (Boolean) -> Unit,
     onSelectVibrationStyle: (VibrationStyle) -> Unit,
@@ -120,7 +126,32 @@ fun SettingsScreen(
     onImportSyzygyFiles: (List<Uri>) -> Unit,
     onDeleteSyzygyTable: (String) -> Unit,
     onClearSyzygyTables: () -> Unit,
-    onOpenAboutLicenses: () -> Unit
+    onOpenAboutLicenses: () -> Unit,
+    onSelectStockfishThreads: (Int) -> Unit = {},
+    onSelectStockfishHashMb: (Int) -> Unit = {},
+    onTogglePowerSaving: (Boolean) -> Unit = {},
+    onSelectEvalBarPosition: (EvalBarPosition) -> Unit = {},
+    onToggleShowEngineArrows: (Boolean) -> Unit = {},
+    onSelectAnalysisMultiPvCount: (Int) -> Unit = {},
+    onTogglePremove: (Boolean) -> Unit = {},
+    onToggleUnassisted: (Boolean) -> Unit = {},
+    onToggleShowThreats: (Boolean) -> Unit = {},
+    onToggleBotResign: (Boolean) -> Unit = {},
+    onTogglePauseOnBlunder: (Boolean) -> Unit = {},
+    onTogglePauseOnMistake: (Boolean) -> Unit = {},
+    onToggleShowMyMoveStrength: (Boolean) -> Unit = {},
+    onToggleShowOpponentMoveStrength: (Boolean) -> Unit = {},
+    onToggleShowMultiPvNumbers: (Boolean) -> Unit = {},
+    onToggleArrowStrengthColors: (Boolean) -> Unit = {},
+    onTogglePreviousBestGhostArrow: (Boolean) -> Unit = {},
+    onToggleColorLastMoveByQuality: (Boolean) -> Unit = {},
+    onToggleFigurineNotation: (Boolean) -> Unit = {},
+    onToggleShowCapturedPieces: (Boolean) -> Unit = {},
+    onToggleShowCoordinates: (Boolean) -> Unit = {},
+    onToggleTapOnlyDisableDrag: (Boolean) -> Unit = {},
+    onToggleEnlargeOnDrag: (Boolean) -> Unit = {},
+    onToggleShowAverageCplInReport: (Boolean) -> Unit = {},
+    onChangeBoardScalePercent: (Int) -> Unit = {}
 ) {
     val context = LocalContext.current
     val hasOverlayPerm = FloatingChessService.canDrawOverlay(context)
@@ -287,7 +318,7 @@ fun SettingsScreen(
                 }
             }
 
-            // 2. محرك الشطرنج (Stockfish UCI + 5 Tiers + 13 Personalities)
+            // 2. محرك الشطرنج (Stockfish UCI + 5 Tiers + 50 Personalities)
             item {
                 SettingsSectionCard(
                     title = "محرك الشطرنج (Stockfish UCI)",
@@ -481,7 +512,7 @@ fun SettingsScreen(
                     )
                     HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
                     SettingsNavRow(
-                        title = "شخصية المحرك والشدّة والمخاطرة",
+                        title = "شخصية المحرك والشدّة والمخاطرة (٥٠ شخصية)",
                         subtitle = "${prefs.enginePersonality.nameAr} • شدّة ${formatArabicNumber(prefs.personalityIntensity)}٪ • ${prefs.personalityRisk.nameAr}",
                         icon = Icons.Rounded.AutoAwesome,
                         tag = "engine_personality_row",
@@ -490,10 +521,101 @@ fun SettingsScreen(
                     HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
                     SettingsSwitchRow(
                         title = "شريط التقييم الحي",
-                        subtitle = "إظهار أفضلية الأبيض والأسود بجانب الرقعة",
+                        subtitle = "إظهار أفضلية الأبيض والأسود مع الرقعة",
                         checked = prefs.showEvalBar,
                         tag = "eval_bar_switch",
                         onCheckedChange = onToggleEvalBar
+                    )
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
+                    Text(
+                        text = "موضع شريط التقييم",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        EvalBarPosition.entries.forEach { pos ->
+                            FilterChip(
+                                selected = prefs.evalBarPosition == pos,
+                                onClick = { onSelectEvalBarPosition(pos) },
+                                label = { Text(pos.nameAr) },
+                                modifier = Modifier.testTag("eval_pos_${pos.id}")
+                            )
+                        }
+                    }
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
+                    Text(
+                        text = "خيوط المعالج (Threads): ${formatArabicNumber(prefs.stockfishThreads)}",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        listOf(1, 2, 3, 4).forEach { t ->
+                            FilterChip(
+                                selected = prefs.stockfishThreads == t,
+                                onClick = { onSelectStockfishThreads(t) },
+                                label = { Text(formatArabicNumber(t)) },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    }
+                    Text(
+                        text = "ذاكرة المحرك (Hash): ${formatArabicNumber(prefs.stockfishHashMb)} م.ب",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        listOf(16, 32, 64, 128, 256).forEach { mb ->
+                            FilterChip(
+                                selected = prefs.stockfishHashMb == mb,
+                                onClick = { onSelectStockfishHashMb(mb) },
+                                label = { Text("${formatArabicNumber(mb)} م.ب") }
+                            )
+                        }
+                    }
+                    SettingsSwitchRow(
+                        title = "وضع توفير الطاقة",
+                        subtitle = "تقليل عمق وزمن البحث التلقائي للحفاظ على البطارية",
+                        checked = prefs.powerSavingMode,
+                        tag = "power_saving_switch",
+                        onCheckedChange = onTogglePowerSaving
+                    )
+                    Text(
+                        text = "عدد خطوط التحليل (MultiPV): ${formatArabicNumber(prefs.analysisMultiPvCount)}",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        (1..5).forEach { cnt ->
+                            FilterChip(
+                                selected = prefs.analysisMultiPvCount == cnt,
+                                onClick = { onSelectAnalysisMultiPvCount(cnt) },
+                                label = { Text(formatArabicNumber(cnt)) },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    }
+                    SettingsSwitchRow(
+                        title = "أسهم المحرك على الرقعة",
+                        subtitle = "رسم أسهم أفضل الخطوط المقترحة أثناء التحليل",
+                        checked = prefs.showEngineArrowsOnBoard,
+                        tag = "engine_arrows_switch",
+                        onCheckedChange = onToggleShowEngineArrows
                     )
                 }
             }
@@ -616,7 +738,7 @@ fun SettingsScreen(
                                 .heightIn(min = 48.dp)
                                 .testTag("launch_floating_window_btn")
                         ) {
-                            Icon(Icons.Rounded.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Icon(Icons.AutoMirrored.Rounded.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(Modifier.width(4.dp))
                             Text(if (hasOverlayPerm) "تشغيل" else "منح الإذن")
                         }
@@ -649,27 +771,34 @@ fun SettingsScreen(
                 ) {
                     SettingsSwitchRow(
                         title = "المؤثرات الصوتية",
-                        subtitle = "٣ طوابع (ناعم، خشبي، رقمي) لكل أحداث اللعب",
+                        subtitle = "٨ طوابع صوتية واقعية لكل أحداث اللعب (اضغط للمعاينة)",
                         checked = prefs.soundEnabled,
                         tag = "sound_switch",
                         onCheckedChange = onToggleSound
                     )
                     if (prefs.soundEnabled) {
-                        Row(
+                        FlowRow(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             SoundProfile.entries.forEach { sp ->
                                 FilterChip(
                                     selected = prefs.soundProfile == sp,
-                                    onClick = { onSelectSoundProfile(sp) },
+                                    onClick = {
+                                        onSelectSoundProfile(sp)
+                                        onPreviewSoundProfile(sp)
+                                    },
                                     label = { Text(sp.nameAr) },
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .testTag("sound_profile_${sp.id}")
+                                    modifier = Modifier.testTag("sound_profile_${sp.id}")
                                 )
                             }
                         }
+                        Text(
+                            text = "${prefs.soundProfile.nameAr}: ${prefs.soundProfile.descAr}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                         Text(
                             text = "مستوى الصوت: ${formatArabicNumber(prefs.soundVolume)}٪",
                             style = MaterialTheme.typography.labelMedium,
@@ -767,10 +896,82 @@ fun SettingsScreen(
                 }
             }
 
-            // 6. المراجعة والتلميحات
+            // 6. إعدادات اللعب
             item {
                 SettingsSectionCard(
-                    title = "المراجعة والتلميحات",
+                    title = "إعدادات اللعب",
+                    icon = Icons.Rounded.SportsEsports
+                ) {
+                    SettingsSwitchRow(
+                        title = "الحركة المسبقة (Pre-move)",
+                        subtitle = "تحديد نقلتك التالية مسبقاً أثناء تفكير الخصم",
+                        checked = prefs.premoveEnabled,
+                        tag = "settings_premove_switch",
+                        onCheckedChange = onTogglePremove
+                    )
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
+                    SettingsSwitchRow(
+                        title = "لعب بدون مساعدة",
+                        subtitle = "إخفاء التقييم والأسهم والتهديدات أثناء المباريات الجارية",
+                        checked = prefs.unassistedMode,
+                        tag = "settings_unassisted_switch",
+                        onCheckedChange = onToggleUnassisted
+                    )
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
+                    SettingsSwitchRow(
+                        title = "إظهار التهديدات",
+                        subtitle = "رسم أسهم تحذيرية لتهديدات الخصم المباشرة",
+                        checked = prefs.showThreats,
+                        tag = "settings_threats_switch",
+                        onCheckedChange = onToggleShowThreats
+                    )
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
+                    SettingsSwitchRow(
+                        title = "استسلام البوت عند الخسارة الحتمية",
+                        subtitle = "انسحاب المحرك تلقائياً بعد ٣ نقلات متتالية بأفضلية ساحقة",
+                        checked = prefs.botResignEnabled,
+                        tag = "settings_bot_resign_switch",
+                        onCheckedChange = onToggleBotResign
+                    )
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
+                    SettingsSwitchRow(
+                        title = "إيقاف مؤقت عند الخطأ الفادح (??)",
+                        subtitle = "تنبيه فوري مع خيار التراجع عن الخطأ الكبير",
+                        checked = prefs.pauseOnBlunder,
+                        tag = "settings_pause_blunder_switch",
+                        onCheckedChange = onTogglePauseOnBlunder
+                    )
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
+                    SettingsSwitchRow(
+                        title = "إيقاف مؤقت عند الخطأ (?)",
+                        subtitle = "تنبيه فوري عند ارتكاب خطأ متوسط أثناء التدريب",
+                        checked = prefs.pauseOnMistake,
+                        tag = "settings_pause_mistake_switch",
+                        onCheckedChange = onTogglePauseOnMistake
+                    )
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
+                    SettingsSwitchRow(
+                        title = "إظهار قوة نقلاتي",
+                        subtitle = "تمييز جودة كل نقلة تلعبها في الشريط والرقعة",
+                        checked = prefs.showMyMoveStrength,
+                        tag = "settings_my_strength_switch",
+                        onCheckedChange = onToggleShowMyMoveStrength
+                    )
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
+                    SettingsSwitchRow(
+                        title = "إظهار قوة نقلات الخصم",
+                        subtitle = "عرض تقييم وجودة نقلات الخصم للمراجعة السريعة",
+                        checked = prefs.showOpponentMoveStrength,
+                        tag = "settings_opp_strength_switch",
+                        onCheckedChange = onToggleShowOpponentMoveStrength
+                    )
+                }
+            }
+
+            // 7. المراجعة والتحليل المتقدم
+            item {
+                SettingsSectionCard(
+                    title = "المراجعة والإعدادات المتقدمة",
                     icon = Icons.Rounded.AutoAwesome
                 ) {
                     SettingsSwitchRow(
@@ -779,6 +980,91 @@ fun SettingsScreen(
                         checked = prefs.autoReviewAfterGame,
                         tag = "auto_review_switch",
                         onCheckedChange = onToggleAutoReview
+                    )
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
+                    SettingsSwitchRow(
+                        title = "تلوين الأسهم حسب القوة",
+                        subtitle = "تمييز أسهم الخطوط بألوان تدريجية حسب الأفضلية",
+                        checked = prefs.arrowStrengthColors,
+                        tag = "arrow_strength_colors_switch",
+                        onCheckedChange = onToggleArrowStrengthColors
+                    )
+                    SettingsSwitchRow(
+                        title = "أرقام ترتيب أسهم MultiPV",
+                        subtitle = "عرض أرقام ١..٥ داخل رأس كل سهم تحليل",
+                        checked = prefs.showMultiPvArrowNumbers,
+                        tag = "multipv_numbers_switch",
+                        onCheckedChange = onToggleShowMultiPvNumbers
+                    )
+                    SettingsSwitchRow(
+                        title = "سهم أفضل نقلة سابقة (شبح)",
+                        subtitle = "إظهار سهم شفاف لأفضل نقلة متاحة قبل النقلة المختارة في المراجعة",
+                        checked = prefs.showPreviousBestGhostArrow,
+                        tag = "ghost_arrow_switch",
+                        onCheckedChange = onTogglePreviousBestGhostArrow
+                    )
+                    SettingsSwitchRow(
+                        title = "تلوين آخر نقلة حسب الجودة",
+                        subtitle = "تمييز خانة الوصول وشارة الجودة (!! ★ ?! ? ??)",
+                        checked = prefs.colorLastMoveByQuality,
+                        tag = "color_last_move_quality_switch",
+                        onCheckedChange = onToggleColorLastMoveByQuality
+                    )
+                    SettingsSwitchRow(
+                        title = "الترميز التصويري للقطع (Figurine SAN)",
+                        subtitle = "عرض رموز ♔♕♖♗♘ بدلاً من الحروف الإنجليزية في السجل",
+                        checked = prefs.figurineNotation,
+                        tag = "figurine_notation_switch",
+                        onCheckedChange = onToggleFigurineNotation
+                    )
+                    SettingsSwitchRow(
+                        title = "إظهار القطع المأسورة والأفضلية",
+                        subtitle = "عرض القطع المأسورة وفارق المادة بجانب أسماء اللاعبين",
+                        checked = prefs.showCapturedPieces,
+                        tag = "show_captured_pieces_switch",
+                        onCheckedChange = onToggleShowCapturedPieces
+                    )
+                    SettingsSwitchRow(
+                        title = "إحداثيات الرقعة (a-h / 1-8)",
+                        subtitle = "عرض حروف وأرقام المربعات على أطراف الرقعة",
+                        checked = prefs.showCoordinates,
+                        tag = "show_coordinates_switch",
+                        onCheckedChange = onToggleShowCoordinates
+                    )
+                    SettingsSwitchRow(
+                        title = "النقر فقط (تعطيل السحب)",
+                        subtitle = "تثبيت اللعب بطريقة اختيار المربع ثم الوجهة",
+                        checked = prefs.tapOnlyDisableDrag,
+                        tag = "tap_only_switch",
+                        onCheckedChange = onToggleTapOnlyDisableDrag
+                    )
+                    SettingsSwitchRow(
+                        title = "تكبير القطعة عند التحديد",
+                        subtitle = "تكبير بصري لطيف للقطعة المختارة لتسهيل الرؤية",
+                        checked = prefs.enlargeOnDrag,
+                        tag = "enlarge_on_drag_switch",
+                        onCheckedChange = onToggleEnlargeOnDrag
+                    )
+                    SettingsSwitchRow(
+                        title = "متوسط خسارة السنتيبيدق (ACPL) في التقرير",
+                        subtitle = "إظهار إحصائية ACPL لك وللخصم في تقرير المباراة",
+                        checked = prefs.showAverageCplInReport,
+                        tag = "show_acpl_report_switch",
+                        onCheckedChange = onToggleShowAverageCplInReport
+                    )
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
+                    Text(
+                        text = "نسبة حجم الرقعة: ${formatArabicNumber(prefs.boardScalePercent)}٪",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Slider(
+                        value = prefs.boardScalePercent.toFloat(),
+                        onValueChange = { onChangeBoardScalePercent(it.roundToInt().coerceIn(85, 100)) },
+                        valueRange = 85f..100f,
+                        steps = 14,
+                        modifier = Modifier.testTag("board_scale_slider")
                     )
                 }
             }
@@ -821,9 +1107,13 @@ fun SettingsScreen(
                 )
             },
             text = {
+                val statusDesc = if (stockfishStatus.isNativeStockfishReady) {
+                    "الحالة: متصل (${stockfishStatus.engineName})\nالمسار: ${stockfishStatus.nativeBinaryPath ?: "-"}\nالشبكة العصبية: nn-1a298aa575a0.nnue مدمجة وجاهزة."
+                } else {
+                    "الحالة: ${stockfishStatus.diagnosticMessageAr}"
+                }
                 Text(
-                    text = "يدعم التطبيق بروتوكول UCI الكامل لمحرك Stockfish مع إدارة خيط واحد مخصّص ومهل انتظار دقيقة (٤٥ ثانية للبدء، ٢٠ ثانية للاستعداد، وذاكرة Hash ٣٢ ميجابايت).\n\n" +
-                        "عند بناء الحزمة عبر GitHub Actions تُدمج مكتبات arm64-v8a و x86_64، وفي بيئات المعاينة يعمل المحرك الاحتياطي المدمج تلقائياً بنفس صيغ الإيلو والشخصيات الـ ١٣.",
+                    text = "$statusDesc\n\nيدعم التطبيق محرك Stockfish 19 الأصلي (arm64-v8a و x86_64) عبر بروتوكول UCI الكامل مع شبكة NNUE وذاكرة Hash ٣٢ ميجابايت ومهل انتظار ٤٥/٢٠ ثانية.",
                     style = MaterialTheme.typography.bodyMedium
                 )
             },

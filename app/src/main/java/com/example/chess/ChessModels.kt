@@ -122,7 +122,46 @@ data class RecordedMove(
     val quality: MoveQuality,
     val phase: GamePhase,
     val coachNoteAr: String = "",
-    val bestMoveSan: String = ""
+    val bestMoveSan: String = "",
+    val isOpeningBook: Boolean = false
+)
+
+enum class EvalBarPosition(val id: String, val nameAr: String) {
+    SMART("smart", "ذكي (تلقائي)"),
+    BELOW_BOARD("below", "أسفل الرقعة"),
+    LEFT_OF_BOARD("left", "يسار الرقعة"),
+    LEFT_IN_REPORT("left_report", "إلى اليسار في تقرير المباراة");
+
+    companion object {
+        fun byId(id: String): EvalBarPosition = entries.find { it.id == id } ?: SMART
+    }
+}
+
+enum class LastMoveHighlightStyle(val id: String, val nameAr: String) {
+    NONE("none", "بدون"),
+    FILL("fill", "تعبئة"),
+    BORDER("border", "إطار");
+
+    companion object {
+        fun byId(id: String): LastMoveHighlightStyle = entries.find { it.id == id } ?: FILL
+    }
+}
+
+enum class PieceAnimationStyle(val id: String, val nameAr: String) {
+    DEFAULT("default", "افتراضي"),
+    FADE("fade", "تلاشي"),
+    PULSE("pulse", "نبض"),
+    TRAIL("trail", "مسار متوهج");
+
+    companion object {
+        fun byId(id: String): PieceAnimationStyle = entries.find { it.id == id } ?: DEFAULT
+    }
+}
+
+data class ThreatArrow(
+    val from: Square,
+    val to: Square,
+    val targetPiece: ChessPiece
 )
 
 enum class GameResult(val labelAr: String) {
@@ -218,10 +257,15 @@ enum class PersonalityRisk(
     }
 }
 
-enum class SoundProfile(val id: String, val nameAr: String) {
-    SOFT("soft", "ناعم"),
-    WOOD("wood", "خشبي"),
-    DIGITAL("digital", "رقمي");
+enum class SoundProfile(val id: String, val nameAr: String, val descAr: String) {
+    SOFT("soft", "ناعم", "نقر لبادي هادئ ومريح للأذن"),
+    WOOD("wood", "خشبي", "صوت قطع خشبية دافئة على رقعة أصلية"),
+    DIGITAL("digital", "رقمي", "نغمة إلكترونية حديثة سريعة"),
+    MARBLE("marble", "رخامي", "رنين حجري نقي بوقع حاد"),
+    CLASSIC_CLICK("classic_click", "نقر تقليدي", "نقرة خشب صلب بنغمة قصيرة واضحة"),
+    TOURNAMENT("tournament", "بطولة", "صوت الساعة والقطع الخشبية الثقيلة"),
+    CRYSTAL("crystal", "كريستال", "رنين زجاجي صافٍ بترددات عالية"),
+    ARCADE("arcade", "إيقاعي", "مؤثرات تفاعلية حيوية للتدريب السريع");
 
     companion object {
         fun byId(id: String): SoundProfile = entries.find { it.id == id } ?: SOFT
@@ -536,143 +580,7 @@ enum class BotPersona(
     }
 }
 
-/**
- * Ruqaa 13 Engine Personalities (12 active styles + CLASSIC baseline).
- */
-enum class EnginePersonality(
-    val id: String,
-    val nameAr: String,
-    val styleBadgeAr: String,
-    val descriptionAr: String,
-    val aggressionWeight: Float,
-    val tacticalWeight: Float,
-    val safetyWeight: Float
-) {
-    CLASSIC(
-        id = "classic",
-        nameAr = "كلاسيكي",
-        styleBadgeAr = "بلا شخصية",
-        descriptionAr = "Stockfish وفق القوة المختارة والأسلوب البشري فقط.",
-        aggressionWeight = 1.0f,
-        tacticalWeight = 1.0f,
-        safetyWeight = 1.0f
-    ),
-    FIERCE_WARRIOR(
-        id = "warrior",
-        nameAr = "المحارب الشرس",
-        styleBadgeAr = "هجومي",
-        descriptionAr = "الضغط على الخصم، الكشّات، التكتيك، وتقدّم البيادق المبكر.",
-        aggressionWeight = 1.45f,
-        tacticalWeight = 1.22f,
-        safetyWeight = 0.80f
-    ),
-    IRON_FORTRESS(
-        id = "fortress",
-        nameAr = "القلعة الحديدية",
-        styleBadgeAr = "دفاعي",
-        descriptionAr = "حماية القطع، التبييت السريع، بنية البيادق، والبيادق الحرة.",
-        aggressionWeight = 0.82f,
-        tacticalWeight = 1.0f,
-        safetyWeight = 1.45f
-    ),
-    STRATEGIC_GENIUS(
-        id = "strategist",
-        nameAr = "العبقري الاستراتيجي",
-        styleBadgeAr = "موضعي",
-        descriptionAr = "تمركز القطع، بنية البيادق بوزن مرتفع، والأهداف الاستراتيجية.",
-        aggressionWeight = 1.0f,
-        tacticalWeight = 1.06f,
-        safetyWeight = 1.25f
-    ),
-    PATIENT_SERPENT(
-        id = "serpent",
-        nameAr = "الثعبان الصبور",
-        styleBadgeAr = "ضاغط بهدوء",
-        descriptionAr = "تقييد الخصم والتمركز والبنية؛ يتجنب الأخذ والكش المبكر والتكرار.",
-        aggressionWeight = 0.90f,
-        tacticalWeight = 1.05f,
-        safetyWeight = 1.32f
-    ),
-    ENDGAME_MASTER(
-        id = "endgame_master",
-        nameAr = "سيد النهايات",
-        styleBadgeAr = "نهايات",
-        descriptionAr = "البيادق الحرة، نشاط الملك، الأخذ عند التفوق، والبنية والحماية.",
-        aggressionWeight = 0.96f,
-        tacticalWeight = 1.12f,
-        safetyWeight = 1.30f
-    ),
-    SACRIFICE_KING(
-        id = "sacrifice_king",
-        nameAr = "ملك التضحيات",
-        styleBadgeAr = "مغامر",
-        descriptionAr = "التضحية بتعويض، الضغط المتواصل، التكتيك، ومتابعة الكشّات.",
-        aggressionWeight = 1.55f,
-        tacticalWeight = 1.35f,
-        safetyWeight = 0.70f
-    ),
-    BRILLIANCY_CREATOR(
-        id = "brilliancy",
-        nameAr = "صانع البريليانت",
-        styleBadgeAr = "إبداعي",
-        descriptionAr = "الأفكار الهادئة، التضحيات المدروسة، والتمركز؛ يتجنب تعريض القطع.",
-        aggressionWeight = 1.32f,
-        tacticalWeight = 1.32f,
-        safetyWeight = 0.92f
-    ),
-    MISTAKE_CATCHER(
-        id = "catcher",
-        nameAr = "صياد الأخطاء",
-        styleBadgeAr = "عملي",
-        descriptionAr = "التكتيك وتقييد الخصم مع تحقق عملي من استثمار الأخطاء.",
-        aggressionWeight = 1.14f,
-        tacticalWeight = 1.28f,
-        safetyWeight = 1.12f
-    ),
-    TRICKY_GENIUS(
-        id = "tricky_genius",
-        nameAr = "العبقري المتلاعب",
-        styleBadgeAr = "خادع",
-        descriptionAr = "التكتيك، الأفكار الهادئة، عروض الطُّعم، وتقييد الخصم بتحقق عملي.",
-        aggressionWeight = 1.22f,
-        tacticalWeight = 1.30f,
-        safetyWeight = 0.95f
-    ),
-    OPPORTUNITY_HUNTER(
-        id = "hunter",
-        nameAr = "صائد الفرص",
-        styleBadgeAr = "انتهازي",
-        descriptionAr = "المكاسب المادية والتكتيك؛ يفحص المات القصير (حتى ٣ نقلات) أولاً.",
-        aggressionWeight = 1.24f,
-        tacticalWeight = 1.38f,
-        safetyWeight = 1.0f
-    ),
-    LONG_GAME_MAKER(
-        id = "long_game",
-        nameAr = "صانع المباراة الطويلة",
-        styleBadgeAr = "مؤجِّل للحسم",
-        descriptionAr = "عند التفوق يتجنب الأخذ والكش والتكرار ويؤخّر الحسم للحفاظ على المعركة.",
-        aggressionWeight = 0.92f,
-        tacticalWeight = 1.0f,
-        safetyWeight = 1.24f
-    ),
-    MYSTERY_PLAYER(
-        id = "mystery",
-        nameAr = "اللاعب الغامض",
-        styleBadgeAr = "غير متوقع",
-        descriptionAr = "تنويع شبه عشوائي مثبّت بمعرّف المباراة يتجنب تكرار الجناح والقطعة نفسها.",
-        aggressionWeight = 1.10f,
-        tacticalWeight = 1.12f,
-        safetyWeight = 1.0f
-    );
-
-    companion object {
-        fun byId(id: String): EnginePersonality {
-            if (id.isBlank() || id == "traditional" || id == "classic") return CLASSIC
-            return entries.find { it.id == id } ?: CLASSIC
-        }
-    }
-}
+// EnginePersonality & PersonalityCategory moved to EnginePersonalities.kt in com.example.chess
 
 enum class BoardMaterial(val id: String, val nameAr: String) {
     FLAT("flat", "سادة"),
@@ -725,9 +633,20 @@ enum class EngineBackendPreference(val id: String, val nameAr: String, val subti
 enum class PieceStyle(
     val id: String,
     val nameAr: String,
-    val subtitleAr: String
+    val subtitleAr: String,
+    val drawablePrefix: String? = null
 ) {
-    CLASSIC_STAUNTON("classic", "كلاسيكي", "عاج دافئ وأوبسيديان أصيل"),
+    CLASSIC_STAUNTON("classic", "كلاسيكي (رُقعة)", "عاج دافئ وأوبسيديان أصيل"),
+    CBURNETT("cburnett", "Cburnett (عالمي)", "طقم البطولات الأشهر المستورد من PyChess", "pc_cburnett"),
+    CHESSNUT("chessnut", "Chessnut", "تصميم فيكتور أنيق مستورد من PyChess", "pc_chessnut"),
+    COMPANION("companion", "Companion", "قطع عريضة واضحة من PyChess", "pc_companion"),
+    MERIDA("merida", "Merida", "الطقم الكلاسيكي الشهير بتظليل ناعم", "pc_merida"),
+    ALPHA("alpha", "Alpha", "تصميم حاد وعالي التباين للتحليل", "pc_alpha"),
+    LEIPZIG("leipzig", "Leipzig", "طراز الكتب الشطرنجية التراثية", "pc_leipzig"),
+    STAUNTY("staunty", "Staunty", "طابع نحتي عصري بتفاصيل غنية", "pc_staunty"),
+    TATIANA("tatiana", "Tatiana", "انحناءات متناغمة وحدود مصقولة", "pc_tatiana"),
+    FRESCA("fresca", "Fresca", "قطع عصرية مسطحة بوضوح ممتاز", "pc_fresca"),
+    KOSAL("kosal", "Kosal", "طراز هندسي مبسط فائق السرعة", "pc_kosal"),
     MODERN_GEOMETRIC("geometric", "هندسي", "أشكال حادة بلمسة معاصرة"),
     HIGH_CONTRAST("high_contrast", "عالي الوضوح", "خطوط عريضة وتباين حاد للرؤية السريعة"),
     ROYAL_HERITAGE("royal", "تراثي ملكي", "تاج ذهبي وقواعد فاخرة"),
@@ -748,27 +667,63 @@ enum class BoardTheme(
     val lastMoveHighlight: Color,
     val boardBorder: Color
 ) {
-    DEEP_OCEAN(
-        id = "ocean",
-        nameAr = "أزرق",
-        lightSquare = Color(0xFFE3EEF8),
-        darkSquare = Color(0xFF42739A),
-        selectedHighlight = Color(0x8872D9EF),
-        lastMoveHighlight = Color(0x66006A87),
-        boardBorder = Color(0xFF173652)
-    ),
     TOURNAMENT_EMERALD(
         id = "emerald",
-        nameAr = "زيتوني",
+        nameAr = "زيتوني كلاسيكي",
         lightSquare = Color(0xFFEEEED2),
         darkSquare = Color(0xFF769656),
         selectedHighlight = Color(0x99F7C631),
         lastMoveHighlight = Color(0x88BACA44),
         boardBorder = Color(0xFF3A4A29)
     ),
+    STONE_SAND(
+        id = "stone",
+        nameAr = "رملي حجري",
+        lightSquare = Color(0xFFF3EFE6),
+        darkSquare = Color(0xFFA7B3BA),
+        selectedHighlight = Color(0x8872D9EF),
+        lastMoveHighlight = Color(0x66D9B24C),
+        boardBorder = Color(0xFF3E4A52)
+    ),
+    CADET_BLUE(
+        id = "cadet_blue",
+        nameAr = "أزرق كاديت",
+        lightSquare = Color(0xFFDCE4EC),
+        darkSquare = Color(0xFF5D7FA3),
+        selectedHighlight = Color(0x8872D9EF),
+        lastMoveHighlight = Color(0x7738BDF8),
+        boardBorder = Color(0xFF22354A)
+    ),
+    WOOD_MARKS(
+        id = "wood_marks",
+        nameAr = "خشبي مصقول",
+        lightSquare = Color(0xFFE7C89E),
+        darkSquare = Color(0xFF8C5A34),
+        selectedHighlight = Color(0x88FBBF24),
+        lastMoveHighlight = Color(0x66EAB308),
+        boardBorder = Color(0xFF472B17)
+    ),
+    MIDNIGHT_SLATE(
+        id = "midnight",
+        nameAr = "ليلي داكن",
+        lightSquare = Color(0xFF7D8B99),
+        darkSquare = Color(0xFF384452),
+        selectedHighlight = Color(0x8838BDF8),
+        lastMoveHighlight = Color(0x6660A5FA),
+        boardBorder = Color(0xFF171E26)
+    ),
+    DEEP_OCEAN(
+        id = "ocean",
+        nameAr = "أزرق محيطي",
+        lightSquare = Color(0xFFE3EEF8),
+        darkSquare = Color(0xFF42739A),
+        selectedHighlight = Color(0x8872D9EF),
+        lastMoveHighlight = Color(0x66006A87),
+        boardBorder = Color(0xFF173652)
+    ),
     ROYAL_WALNUT(
         id = "walnut",
-        nameAr = "خشبي",
+        nameAr = "جوزي دافئ",
         lightSquare = Color(0xFFEDD6B0),
         darkSquare = Color(0xFFB57C4C),
         selectedHighlight = Color(0x88FBBF24),
@@ -777,7 +732,7 @@ enum class BoardTheme(
     ),
     OBSIDIAN_GOLD(
         id = "obsidian",
-        nameAr = "رمادي",
+        nameAr = "رمادي أردوازي",
         lightSquare = Color(0xFFD8DEE8),
         darkSquare = Color(0xFF526277),
         selectedHighlight = Color(0x8872D9EF),
@@ -836,11 +791,13 @@ data class PostGameReport(
     val playerAccuracy: Int,
     val opponentAccuracy: Int,
     val acpl: Int,
+    val opponentAcpl: Int = 0,
     val openingNameAr: String,
     val openingAccuracy: Int,
     val middlegameAccuracy: Int,
     val endgameAccuracy: Int,
     val qualityCounts: Map<MoveQuality, Int>,
+    val opponentQualityCounts: Map<MoveQuality, Int> = emptyMap(),
     val strengthsAr: List<String>,
     val weaknessesAr: List<String>,
     val diagnosisAr: String,

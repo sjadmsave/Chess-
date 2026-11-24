@@ -6,9 +6,8 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
-import android.graphics.Canvas
+import android.content.res.ColorStateList
 import android.graphics.Color
-import android.graphics.Paint
 import android.graphics.PixelFormat
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -20,13 +19,11 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
-import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
-import androidx.compose.ui.graphics.toArgb
 import androidx.core.app.NotificationCompat
 import com.example.MainActivity
 import com.example.R
@@ -34,7 +31,6 @@ import com.example.audio.ChessHapticEvent
 import com.example.audio.ChessSound
 import com.example.audio.HapticsManager
 import com.example.audio.SoundManager
-import com.example.chess.BoardTheme
 import com.example.chess.ChessBoardState
 import com.example.chess.ChessMove
 import com.example.chess.ChessPiece
@@ -56,16 +52,17 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlin.math.abs
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 /**
  * Floating Chess Overlay Service adhering to Ruqaa Specification Section 11:
  * - TYPE_APPLICATION_OVERLAY, FLAG_NOT_FOCUSABLE | FLAG_NOT_TOUCH_MODAL | FLAG_LAYOUT_IN_SCREEN
  * - Default position x = 12 dp, y = 72 dp, persisted after drag
- * - Width 180..560 dp (default 270 dp) with 44 dp corner resize handle + persisted width
+ * - Width 180..560 dp (default 270 dp) with smooth corner resize grip + quick step controls
  * - Opacity 65..100% (default 100%), Frame shapes (12/7/0 dp), Bubble size (44/52/64 dp)
  * - Notification channel "النافذة العائمة" with IMPORTANCE_LOW
- * - Full tools: Menu (Details, Resize, Bubble, Open Ruqaa, New Game Wizard, Position Editor)
+ * - Synced to app theme (frosted Light / Dark) with crisp Canvas vector icons & pieces
  */
 class FloatingChessService : Service() {
 
@@ -209,10 +206,24 @@ class FloatingChessService : Service() {
         resources.displayMetrics
     ).toInt()
 
+    private fun dpF(value: Float): Float = TypedValue.applyDimension(
+        TypedValue.COMPLEX_UNIT_DIP,
+        value,
+        resources.displayMetrics
+    )
+
     private fun pxToDp(px: Int): Int {
         val density = resources.displayMetrics.density
         return if (density <= 0f) px else (px / density).roundToInt()
     }
+
+    private fun maxAllowedWidthDp(): Int {
+        val screenDp = pxToDp(resources.displayMetrics.widthPixels)
+        return (screenDp - 16).coerceIn(220, 560)
+    }
+
+    private fun clampedWidthDp(requested: Int = prefs.floatingWidthDp): Int =
+        requested.coerceIn(180, maxAllowedWidthDp())
 
     private fun attachOverlayWindow() {
         val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -254,63 +265,38 @@ class FloatingChessService : Service() {
         val container = rootView as? FrameLayout ?: return
         container.removeAllViews()
 
+        val palette = OverlayPalette.resolve(this, prefs.themeMode, prefs.floatingOpacityPercent)
+
         if (mode == OverlayMode.BUBBLE) {
-            val bubblePx = dp(prefs.floatingBubbleSize.sizeDp)
-            val bubble = FrameLayout(this).apply {
-                background = GradientDrawable().apply {
-                    shape = GradientDrawable.OVAL
-                    setColor(Color.parseColor("#006A87"))
-                    setStroke(dp(2), Color.parseColor("#72D9EF"))
-                }
-                elevation = dp(8).toFloat()
-            }
-            val iconText = TextView(this).apply {
-                text = "♜"
-                setTextColor(Color.WHITE)
-                textSize = (prefs.floatingBubbleSize.sizeDp * 0.44f)
-                gravity = Gravity.CENTER
-            }
-            bubble.addView(
-                iconText,
-                FrameLayout.LayoutParams(
-                    FrameLayout.LayoutParams.MATCH_PARENT,
-                    FrameLayout.LayoutParams.MATCH_PARENT
-                )
-            )
-            attachDragAndClick(bubble, onClick = {
-                mode = OverlayMode.BOARD
-                rebuildContent()
-            })
-            container.addView(bubble, FrameLayout.LayoutParams(bubblePx, bubblePx))
+            buildBubbleOverlayUi(container, palette)
             return
         }
 
-        val widthDp = prefs.floatingWidthDp.coerceIn(180, 560)
+        val widthDp = clampedWidthDp()
         val widthPx = dp(widthDp)
-        val alphaInt = ((prefs.floatingOpacityPercent.coerceIn(65, 100) / 100f) * 255).toInt()
-        val cardBg = Color.argb(alphaInt, 21, 34, 56)
-        val strokeColor = Color.parseColor("#2A3D5E")
-        val cornerPx = dp(prefs.floatingFrameShape.cornerDp).toFloat()
+        val cornerPx = dpF(prefs.floatingFrameShape.cornerDp.toFloat())
+        val pad = dp(6)
 
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
+            layoutDirection = View.LAYOUT_DIRECTION_LTR
             background = GradientDrawable().apply {
-                setColor(cardBg)
+                setColor(palette.cardBg)
                 cornerRadius = cornerPx
-                setStroke(dp(1), strokeColor)
+                setStroke(dp(1), palette.cardStroke)
             }
-            setPadding(dp(6), dp(6), dp(6), dp(6))
-            elevation = dp(10).toFloat()
+            setPadding(pad, pad, pad, pad)
+            elevation = dpF(10f)
         }
 
         when (mode) {
-            OverlayMode.BOARD -> buildBoardOverlayUi(card, widthPx)
-            OverlayMode.MENU -> buildMenuOverlayUi(card, widthPx)
-            OverlayMode.DETAILS -> buildDetailsOverlayUi(card, widthPx)
-            OverlayMode.RESIZE -> buildResizeOverlayUi(card, widthPx)
-            OverlayMode.WIZARD_STEP1 -> buildWizardStep1Ui(card, widthPx)
-            OverlayMode.WIZARD_STEP2 -> buildWizardStep2Ui(card, widthPx)
-            OverlayMode.EDITOR -> buildEditorOverlayUi(card, widthPx)
+            OverlayMode.BOARD -> buildBoardOverlayUi(card, widthPx, palette)
+            OverlayMode.MENU -> buildMenuOverlayUi(card, widthPx, palette)
+            OverlayMode.DETAILS -> buildDetailsOverlayUi(card, widthPx, palette)
+            OverlayMode.RESIZE -> buildResizeOverlayUi(card, widthPx, palette)
+            OverlayMode.WIZARD_STEP1 -> buildWizardStep1Ui(card, widthPx, palette)
+            OverlayMode.WIZARD_STEP2 -> buildWizardStep2Ui(card, widthPx, palette)
+            OverlayMode.EDITOR -> buildEditorOverlayUi(card, widthPx, palette)
             OverlayMode.BUBBLE -> Unit
         }
 
@@ -320,122 +306,370 @@ class FloatingChessService : Service() {
         )
     }
 
-    private fun buildTopBar(card: LinearLayout) {
+    private fun buildBubbleOverlayUi(container: FrameLayout, palette: OverlayPalette) {
+        val bubbleDp = prefs.floatingBubbleSize.sizeDp
+        val bubblePx = dp(bubbleDp)
+
+        val bubble = FrameLayout(this).apply {
+            background = GradientDrawable(
+                GradientDrawable.Orientation.TL_BR,
+                intArrayOf(
+                    Color.parseColor("#007D9E"),
+                    Color.parseColor("#005570")
+                )
+            ).apply {
+                shape = GradientDrawable.OVAL
+                setStroke(dp(2), if (palette.isDark) Color.parseColor("#72D9EF") else Color.WHITE)
+            }
+            elevation = dpF(10f)
+        }
+
+        val iconView = OverlayVectorIconView(this, OverlayIconType.BUBBLE_KNIGHT, Color.WHITE)
+        val iconPad = (bubblePx * 0.16f).roundToInt()
+        bubble.addView(
+            iconView,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            ).apply {
+                setMargins(iconPad, iconPad, iconPad, iconPad)
+            }
+        )
+
+        if (isThinking) {
+            val dotPx = dp(10)
+            val thinkingDot = View(this).apply {
+                background = GradientDrawable().apply {
+                    shape = GradientDrawable.OVAL
+                    setColor(Color.parseColor("#FACC15"))
+                    setStroke(dp(1), Color.WHITE)
+                }
+            }
+            bubble.addView(
+                thinkingDot,
+                FrameLayout.LayoutParams(dotPx, dotPx).apply {
+                    gravity = Gravity.TOP or Gravity.END
+                    topMargin = dp(3)
+                    marginEnd = dp(3)
+                }
+            )
+        }
+
+        attachDragAndClick(bubble, onClick = {
+            mode = OverlayMode.BOARD
+            rebuildContent()
+        })
+        container.addView(bubble, FrameLayout.LayoutParams(bubblePx, bubblePx))
+    }
+
+    private fun pillIconButton(
+        iconType: OverlayIconType,
+        palette: OverlayPalette,
+        enabled: Boolean = true,
+        accentTint: Boolean = false,
+        heightDp: Int = 30,
+        onClick: (() -> Unit)? = null
+    ): FrameLayout {
+        val fill = if (enabled) palette.surfacePill else palette.surfaceDisabled
+        val tint = when {
+            !enabled -> palette.textDisabled
+            accentTint -> palette.accent
+            else -> palette.textPrimary
+        }
+        val frame = FrameLayout(this).apply {
+            background = createPillDrawable(
+                fillColor = fill,
+                strokeColor = palette.surfacePillStroke,
+                cornerRadiusPx = dpF(heightDp / 2f),
+                strokeWidthPx = dp(1)
+            )
+            if (enabled && onClick != null) {
+                setOnClickListener { onClick() }
+            }
+        }
+        val iconSz = dp(17)
+        val iconView = OverlayVectorIconView(this, iconType, tint)
+        frame.addView(
+            iconView,
+            FrameLayout.LayoutParams(iconSz, iconSz).apply {
+                gravity = Gravity.CENTER
+            }
+        )
+        return frame
+    }
+
+    private fun pillActionButton(
+        label: String,
+        palette: OverlayPalette,
+        isPrimary: Boolean = false,
+        iconType: OverlayIconType? = null,
+        heightDp: Int = 40,
+        onClick: () -> Unit
+    ): LinearLayout {
+        val fill = if (isPrimary) palette.accentContainer else palette.surfacePill
+        val stroke = if (isPrimary) palette.accentContainer else palette.surfacePillStroke
+        val contentColor = if (isPrimary) palette.onAccent else palette.textPrimary
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            background = createPillDrawable(fill, stroke, dpF(16f), dp(1))
+            setPadding(dp(10), 0, dp(10), 0)
+            minimumHeight = dp(heightDp)
+            setOnClickListener { onClick() }
+
+            val tv = TextView(this@FloatingChessService).apply {
+                text = label
+                textSize = 12.5f
+                setTypeface(null, Typeface.BOLD)
+                setTextColor(contentColor)
+                gravity = Gravity.CENTER
+            }
+            addView(tv)
+
+            if (iconType != null) {
+                val icon = OverlayVectorIconView(this@FloatingChessService, iconType, contentColor)
+                addView(
+                    icon,
+                    LinearLayout.LayoutParams(dp(16), dp(16)).apply {
+                        marginStart = dp(6)
+                    }
+                )
+            }
+        }
+    }
+
+    private fun buildTopBar(card: LinearLayout, palette: OverlayPalette) {
         val bar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
+            layoutDirection = View.LAYOUT_DIRECTION_LTR
             gravity = Gravity.CENTER_VERTICAL
             setPadding(0, 0, 0, dp(5))
         }
 
-        fun iconBtn(symbol: String, enabled: Boolean = true, onClick: () -> Unit): TextView {
-            return TextView(this).apply {
-                text = symbol
-                textSize = 13f
-                gravity = Gravity.CENTER
-                setTextColor(if (enabled) Color.parseColor("#F1F5FA") else Color.parseColor("#64748B"))
-                background = GradientDrawable().apply {
-                    setColor(Color.parseColor("#1E2E4A"))
-                    cornerRadius = dp(10).toFloat()
-                    setStroke(dp(1), Color.parseColor("#2E4366"))
-                }
-                setPadding(dp(6), dp(4), dp(6), dp(4))
-                if (enabled) setOnClickListener { onClick() }
-            }
-        }
-
-        val menuBtn = iconBtn("•••") {
+        val menuBtn = pillIconButton(
+            iconType = OverlayIconType.MENU,
+            palette = palette,
+            accentTint = mode == OverlayMode.MENU
+        ) {
             mode = if (mode == OverlayMode.MENU) OverlayMode.BOARD else OverlayMode.MENU
             rebuildContent()
         }
-        val editBtn = iconBtn("✎") {
+        val editBtn = pillIconButton(
+            iconType = OverlayIconType.EDIT_BOARD,
+            palette = palette,
+            accentTint = true
+        ) {
             editorBoard = boardState.board.copyOf()
             editorTurn = boardState.turn
             mode = OverlayMode.EDITOR
             rebuildContent()
         }
-        val undoBtn = iconBtn("↩", enabled = moveStack.isNotEmpty() && !isThinking) {
+        val undoBtn = pillIconButton(
+            iconType = OverlayIconType.UNDO,
+            palette = palette,
+            enabled = moveStack.isNotEmpty() && !isThinking,
+            accentTint = moveStack.isNotEmpty() && !isThinking
+        ) {
             undoOverlayMoves()
         }
-        val flipBtn = iconBtn("⇅") {
+        val flipBtn = pillIconButton(
+            iconType = OverlayIconType.FLIP,
+            palette = palette
+        ) {
             flipped = !flipped
             rebuildContent()
         }
-        val bubbleBtn = iconBtn("—") {
-            mode = OverlayMode.BUBBLE
-            rebuildContent()
-        }
-        val dragHandle = TextView(this).apply {
-            text = "⋮⋮"
-            textSize = 13f
-            gravity = Gravity.CENTER
-            setTextColor(Color.parseColor("#72D9EF"))
-            background = GradientDrawable().apply {
-                setColor(Color.parseColor("#006A87"))
-                cornerRadius = dp(10).toFloat()
-                setStroke(dp(1), Color.parseColor("#72D9EF"))
-            }
-            setPadding(dp(6), dp(4), dp(6), dp(4))
-        }
+        val dragHandle = pillIconButton(
+            iconType = OverlayIconType.DRAG_GRIP,
+            palette = palette,
+            accentTint = true
+        )
         attachDragAndClick(dragHandle, onClick = null)
 
-        val buttons = listOf(menuBtn, editBtn, undoBtn, flipBtn, bubbleBtn, dragHandle)
+        val buttons = listOf(menuBtn, editBtn, undoBtn, flipBtn, dragHandle)
+        val btnH = dp(31)
         buttons.forEachIndexed { idx, v ->
-            val lp = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
-                if (idx < buttons.lastIndex) marginEnd = dp(4)
+            val lp = LinearLayout.LayoutParams(0, btnH, 1f).apply {
+                if (idx < buttons.lastIndex) marginEnd = dp(5)
             }
             bar.addView(v, lp)
         }
         card.addView(bar)
     }
 
-    private fun buildBoardOverlayUi(card: LinearLayout, cardWidthPx: Int) {
-        buildTopBar(card)
-        val boardPx = cardWidthPx - dp(12)
-        val boardFrame = FrameLayout(this)
+    private fun buildBoardOverlayUi(card: LinearLayout, cardWidthPx: Int, palette: OverlayPalette) {
+        buildTopBar(card, palette)
+
+        val innerPad = dp(12)
+        val boardPx = (cardWidthPx - innerPad).coerceAtLeast(dp(150))
+        val boardCorner = (dpF(prefs.floatingFrameShape.cornerDp.toFloat()) - dpF(3f)).coerceAtLeast(0f)
 
         val boardView = FloatingBoardCanvasView(this).apply {
             updateState(
                 state = boardState,
                 theme = prefs.boardTheme,
+                pieceStyle = prefs.pieceStyle,
                 flipped = flipped,
                 selected = selectedSquare,
                 legalTargets = legalForSelected.map { it.to }.toSet(),
                 lastMove = lastMove,
+                showLastMove = prefs.showLastMove,
+                showLegalMoves = prefs.showLegalMoves,
                 useRings = prefs.useRingsInsteadOfDots,
                 legalColorInt = prefs.legalMoveColorHex.toInt(),
-                selectedColorInt = prefs.selectedColorHex.toInt()
+                selectedColorInt = prefs.selectedColorHex.toInt(),
+                cornerRadiusPx = boardCorner
             )
-            onSquareTapped = { sq ->
-                handleOverlaySquareTap(sq)
+            onSquareTapped = { sq -> handleOverlaySquareTap(sq) }
+        }
+        card.addView(boardView, LinearLayout.LayoutParams(boardPx, boardPx))
+
+        // Sleek bottom control footer directly BELOW the chessboard — zero obstruction of h1!
+        val footerHeight = dp(30)
+        val footer = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutDirection = View.LAYOUT_DIRECTION_LTR
+            gravity = Gravity.CENTER_VERTICAL
+            background = createPillDrawable(
+                fillColor = palette.footerBg,
+                strokeColor = palette.surfacePillStroke,
+                cornerRadiusPx = dpF(14f),
+                strokeWidthPx = dp(1)
+            )
+            setPadding(dp(4), 0, dp(4), 0)
+        }
+
+        // Minimize-to-Bubble compact button
+        val bubbleBtn = FrameLayout(this).apply {
+            background = createPillDrawable(
+                fillColor = palette.surfacePill,
+                strokeColor = palette.surfacePillStroke,
+                cornerRadiusPx = dpF(11f),
+                strokeWidthPx = dp(1)
+            )
+            setOnClickListener {
+                mode = OverlayMode.BUBBLE
+                rebuildContent()
             }
         }
-        boardFrame.addView(boardView, FrameLayout.LayoutParams(boardPx, boardPx))
+        bubbleBtn.addView(
+            OverlayVectorIconView(this, OverlayIconType.MINIMIZE_BUBBLE, palette.accent),
+            FrameLayout.LayoutParams(dp(15), dp(15), Gravity.CENTER)
+        )
+        footer.addView(bubbleBtn, LinearLayout.LayoutParams(dp(28), dp(22)).apply { marginEnd = dp(4) })
 
-        // Ruqaa Section 11: 44dp corner resize handle
-        val handlePx = dp(44)
-        val resizeHandle = TextView(this).apply {
-            text = "⤢"
-            textSize = 14f
+        // Quick Shrink (-) & Expand (+) step buttons
+        val shrinkBtn = FrameLayout(this).apply {
+            val canShrink = clampedWidthDp() > 195
+            background = createPillDrawable(
+                fillColor = if (canShrink) palette.surfacePill else palette.surfaceDisabled,
+                strokeColor = palette.surfacePillStroke,
+                cornerRadiusPx = dpF(11f),
+                strokeWidthPx = dp(1)
+            )
+            if (canShrink) {
+                setOnClickListener { stepOverlayWidth(delta = -45) }
+            }
+        }
+        shrinkBtn.addView(
+            OverlayVectorIconView(
+                this,
+                OverlayIconType.SHRINK_WINDOW,
+                if (clampedWidthDp() > 195) palette.textPrimary else palette.textDisabled
+            ),
+            FrameLayout.LayoutParams(dp(14), dp(14), Gravity.CENTER)
+        )
+        footer.addView(shrinkBtn, LinearLayout.LayoutParams(dp(26), dp(22)).apply { marginEnd = dp(3) })
+
+        val expandBtn = FrameLayout(this).apply {
+            val canExpand = clampedWidthDp() < maxAllowedWidthDp() - 10
+            background = createPillDrawable(
+                fillColor = if (canExpand) palette.surfacePill else palette.surfaceDisabled,
+                strokeColor = palette.surfacePillStroke,
+                cornerRadiusPx = dpF(11f),
+                strokeWidthPx = dp(1)
+            )
+            if (canExpand) {
+                setOnClickListener { stepOverlayWidth(delta = +45) }
+            }
+        }
+        expandBtn.addView(
+            OverlayVectorIconView(
+                this,
+                OverlayIconType.EXPAND_WINDOW,
+                if (clampedWidthDp() < maxAllowedWidthDp() - 10) palette.accent else palette.textDisabled
+            ),
+            FrameLayout.LayoutParams(dp(14), dp(14), Gravity.CENTER)
+        )
+        footer.addView(expandBtn, LinearLayout.LayoutParams(dp(26), dp(22)))
+
+        // Center Turn Status Pill
+        val statusRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
-            setTextColor(Color.parseColor("#72D9EF"))
+        }
+        val turnDot = View(this).apply {
+            val dotColor = if (boardState.turn == PieceColor.WHITE) Color.WHITE else Color.parseColor("#1E293B")
             background = GradientDrawable().apply {
-                setColor(Color.argb(190, 11, 19, 36))
-                cornerRadius = dp(10).toFloat()
-                setStroke(dp(1), Color.parseColor("#72D9EF"))
+                shape = GradientDrawable.OVAL
+                setColor(dotColor)
+                setStroke(dp(1), palette.accent)
             }
         }
-        attachCornerResizeHandle(resizeHandle)
-        val handleLp = FrameLayout.LayoutParams(handlePx, handlePx).apply {
-            gravity = Gravity.BOTTOM or Gravity.END
+        val statusLabel = TextView(this).apply {
+            val res = boardState.evaluateGameResult()
+            text = when {
+                res != GameResult.ONGOING -> res.labelAr
+                isThinking -> "يفكر..."
+                boardState.turn == playerColor -> "دورك"
+                else -> "دور المحرك"
+            }
+            textSize = 11f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(palette.textPrimary)
+            maxLines = 1
         }
-        boardFrame.addView(resizeHandle, handleLp)
+        statusRow.addView(turnDot, LinearLayout.LayoutParams(dp(8), dp(8)).apply { marginEnd = dp(5) })
+        statusRow.addView(statusLabel)
+        footer.addView(statusRow, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
 
-        card.addView(boardFrame, LinearLayout.LayoutParams(boardPx, boardPx))
+        // Corner Drag-Resize Grip (sleek diagonal lines, generous touch area, NO ugly dark overlay on board!)
+        val resizeGrip = FrameLayout(this)
+        resizeGrip.addView(
+            OverlayVectorIconView(this, OverlayIconType.CORNER_RESIZE, palette.accent),
+            FrameLayout.LayoutParams(dp(16), dp(16), Gravity.CENTER)
+        )
+        attachCornerResizeHandle(resizeGrip, card, boardView, footer, innerPad)
+        footer.addView(resizeGrip, LinearLayout.LayoutParams(dp(34), dp(28)))
+
+        card.addView(footer, LinearLayout.LayoutParams(boardPx, footerHeight).apply {
+            topMargin = dp(5)
+        })
     }
 
-    private fun buildMenuOverlayUi(card: LinearLayout, cardWidthPx: Int) {
-        buildTopBar(card)
+    private fun stepOverlayWidth(delta: Int) {
+        val next = (clampedWidthDp() + delta).coerceIn(180, maxAllowedWidthDp())
+        prefs = prefs.copy(floatingWidthDp = next)
+        rebuildContent()
+        serviceScope.launch {
+            prefsRepo.saveFloatingCustomization(
+                next,
+                prefs.floatingFrameShape,
+                prefs.floatingOpacityPercent,
+                prefs.floatingBubbleSize
+            )
+        }
+    }
 
+    private fun buildMenuOverlayUi(card: LinearLayout, cardWidthPx: Int, palette: OverlayPalette) {
+        buildTopBar(card, palette)
+
+        val statusBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.END or Gravity.CENTER_VERTICAL
+            background = createPillDrawable(palette.surfacePill, palette.surfacePillStroke, dpF(16f), dp(1))
+            setPadding(dp(12), dp(7), dp(12), dp(7))
+        }
         val statusText = TextView(this).apply {
             val res = boardState.evaluateGameResult()
             text = when {
@@ -444,90 +678,114 @@ class FloatingChessService : Service() {
                 boardState.turn == playerColor -> "دورك"
                 else -> "دور المحرك"
             }
-            textSize = 13f
+            textSize = 12.5f
             setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.parseColor("#F1F5FA"))
-            gravity = Gravity.END
-            setPadding(dp(6), dp(2), dp(6), dp(6))
+            setTextColor(palette.textPrimary)
         }
-        card.addView(statusText, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+        val turnCircle = View(this).apply {
+            val c = if (boardState.turn == PieceColor.WHITE) Color.WHITE else Color.parseColor("#1E293B")
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(c)
+                setStroke(dp(1), palette.accent)
+            }
+        }
+        statusBar.addView(statusText, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+            marginEnd = dp(8)
+        })
+        statusBar.addView(turnCircle, LinearLayout.LayoutParams(dp(11), dp(11)))
+        card.addView(statusBar, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+            bottomMargin = dp(6)
+        })
 
-        val scroll = ScrollView(this)
+        val scroll = ScrollView(this).apply {
+            isVerticalScrollBarEnabled = false
+        }
         val list = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
         }
 
-        fun menuItem(title: String, icon: String, isDanger: Boolean = false, enabled: Boolean = true, onClick: () -> Unit) {
+        fun menuItem(
+            title: String,
+            iconType: OverlayIconType,
+            isDanger: Boolean = false,
+            enabled: Boolean = true,
+            onClick: () -> Unit
+        ) {
             val btn = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
+                layoutDirection = View.LAYOUT_DIRECTION_LTR
                 gravity = Gravity.CENTER_VERTICAL
-                background = GradientDrawable().apply {
-                    setColor(Color.parseColor("#1E2E4A"))
-                    cornerRadius = dp(12).toFloat()
-                    setStroke(dp(1), Color.parseColor("#2E4366"))
-                }
-                setPadding(dp(10), dp(9), dp(10), dp(9))
+                background = createPillDrawable(
+                    fillColor = if (enabled) palette.surfacePill else palette.surfaceDisabled,
+                    strokeColor = palette.surfacePillStroke,
+                    cornerRadiusPx = dpF(16f),
+                    strokeWidthPx = dp(1)
+                )
+                setPadding(dp(12), dp(10), dp(12), dp(10))
                 if (enabled) setOnClickListener { onClick() }
-            }
-            val iconTv = TextView(this).apply {
-                text = icon
-                textSize = 14f
-                setTextColor(if (isDanger) Color.parseColor("#F87171") else Color.parseColor("#72D9EF"))
-                setPadding(0, 0, dp(8), 0)
             }
             val titleTv = TextView(this).apply {
                 text = title
-                textSize = 13f
+                textSize = 12.5f
                 setTypeface(null, Typeface.BOLD)
                 setTextColor(
                     when {
-                        !enabled -> Color.parseColor("#64748B")
-                        isDanger -> Color.parseColor("#F87171")
-                        else -> Color.parseColor("#F1F5FA")
+                        !enabled -> palette.textDisabled
+                        isDanger -> palette.danger
+                        else -> palette.textPrimary
                     }
                 )
-                gravity = Gravity.END
+                gravity = Gravity.CENTER
             }
-            btn.addView(iconTv)
+            val iconColor = when {
+                !enabled -> palette.textDisabled
+                isDanger -> palette.danger
+                else -> palette.accent
+            }
+            val iconView = OverlayVectorIconView(this, iconType, iconColor)
             btn.addView(titleTv, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-            val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-                bottomMargin = dp(6)
-            }
-            list.addView(btn, lp)
+            btn.addView(iconView, LinearLayout.LayoutParams(dp(18), dp(18)).apply { marginStart = dp(8) })
+            list.addView(
+                btn,
+                LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                    bottomMargin = dp(6)
+                }
+            )
         }
 
-        menuItem("عرض الرقعة", "♟") {
+        menuItem("عرض الرقعة", OverlayIconType.BOARD_GRID) {
             mode = OverlayMode.BOARD
             rebuildContent()
         }
-        menuItem("تفاصيل الجلسة والوضعية", "ⓘ") {
-            mode = OverlayMode.DETAILS
-            rebuildContent()
-        }
-        menuItem("تغيير الحجم (${formatArabicNumber(prefs.floatingWidthDp)} dp)", "⤢") {
-            mode = OverlayMode.RESIZE
-            rebuildContent()
-        }
-        menuItem("تراجع عن النقلة", "↩", enabled = moveStack.isNotEmpty() && !isThinking) {
+        menuItem("تراجع عن النقلة", OverlayIconType.UNDO, enabled = moveStack.isNotEmpty() && !isThinking) {
             undoOverlayMoves()
             mode = OverlayMode.BOARD
             rebuildContent()
         }
-        menuItem("محرر الوضعية", "✎") {
+        menuItem("تعديل الوضعية", OverlayIconType.EDIT_BOARD) {
             editorBoard = boardState.board.copyOf()
             editorTurn = boardState.turn
             mode = OverlayMode.EDITOR
             rebuildContent()
         }
-        menuItem("إعداد مباراة جديدة", "✦") {
+        menuItem("حجم النافذة (${formatArabicNumber(clampedWidthDp())} dp)", OverlayIconType.RESIZE_SLIDERS) {
+            mode = OverlayMode.RESIZE
+            rebuildContent()
+        }
+        menuItem("تفاصيل المباراة", OverlayIconType.INFO) {
+            mode = OverlayMode.DETAILS
+            rebuildContent()
+        }
+        menuItem("مباراة جديدة", OverlayIconType.NEW_MATCH) {
             mode = OverlayMode.WIZARD_STEP1
             rebuildContent()
         }
-        menuItem("تصغير إلى فقاعة", "—") {
+        menuItem("تصغير إلى فقاعة", OverlayIconType.MINIMIZE_BUBBLE) {
             mode = OverlayMode.BUBBLE
             rebuildContent()
         }
-        menuItem("فتح رُقعة", "↗") {
+        menuItem("فتح رُقعة", OverlayIconType.OPEN_APP) {
             val openIntent = Intent(this, MainActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
                 putExtra(EXTRA_FEN, boardState.toFen())
@@ -536,16 +794,16 @@ class FloatingChessService : Service() {
             startActivity(openIntent)
             stopSelf()
         }
-        menuItem("إغلاق النافذة", "✕", isDanger = true) {
+        menuItem("إغلاق النافذة", OverlayIconType.CLOSE_X, isDanger = true) {
             stopSelf()
         }
 
         scroll.addView(list)
-        card.addView(scroll, LinearLayout.LayoutParams(cardWidthPx - dp(12), dp(235)))
+        card.addView(scroll, LinearLayout.LayoutParams(cardWidthPx - dp(12), dp(248)))
     }
 
-    private fun buildDetailsOverlayUi(card: LinearLayout, cardWidthPx: Int) {
-        buildWizardHeader(card, "تفاصيل المباراة")
+    private fun buildDetailsOverlayUi(card: LinearLayout, cardWidthPx: Int, palette: OverlayPalette) {
+        buildWizardHeader(card, palette, "تفاصيل المباراة")
         val eloLabel = if (wizardElo <= 0) "بلا حد (أقصى قوة)" else "نحو ${formatArabicNumber(wizardElo)} إيلو"
         val details = TextView(this).apply {
             text = buildString {
@@ -557,104 +815,182 @@ class FloatingChessService : Service() {
                 append("• FEN: ${boardState.toFen()}")
             }
             textSize = 12f
-            setTextColor(Color.parseColor("#CBD5E1"))
+            setTextColor(palette.textSecondary)
             gravity = Gravity.END
-            setPadding(dp(6), dp(4), dp(6), dp(10))
+            background = createPillDrawable(palette.surfacePill, palette.surfacePillStroke, dpF(14f), dp(1))
+            setPadding(dp(10), dp(10), dp(10), dp(10))
         }
-        card.addView(details, LinearLayout.LayoutParams(cardWidthPx - dp(12), LinearLayout.LayoutParams.WRAP_CONTENT))
+        card.addView(details, LinearLayout.LayoutParams(cardWidthPx - dp(12), LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+            bottomMargin = dp(8)
+        })
 
-        val backBtn = Button(this).apply {
-            text = "العودة للرقعة"
-            isAllCaps = false
-            setTextColor(Color.WHITE)
-            background = GradientDrawable().apply {
-                setColor(Color.parseColor("#006A87"))
-                cornerRadius = dp(12).toFloat()
-            }
-            setOnClickListener {
-                mode = OverlayMode.BOARD
-                rebuildContent()
-            }
+        val backBtn = pillActionButton("العودة للرقعة", palette, isPrimary = true) {
+            mode = OverlayMode.BOARD
+            rebuildContent()
         }
-        card.addView(backBtn, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(44)))
+        card.addView(backBtn, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(42)))
     }
 
-    private fun buildResizeOverlayUi(card: LinearLayout, cardWidthPx: Int) {
-        buildWizardHeader(card, "تغيير حجم النافذة")
-        var pendingWidth = prefs.floatingWidthDp.coerceIn(180, 560)
+    private fun buildResizeOverlayUi(card: LinearLayout, cardWidthPx: Int, palette: OverlayPalette) {
+        buildWizardHeader(card, palette, "حجم النافذة")
+        val maxW = maxAllowedWidthDp()
+        var pendingWidth = clampedWidthDp()
+
         val sizeTv = TextView(this).apply {
             text = "العرض: ${formatArabicNumber(pendingWidth)} dp"
-            textSize = 13f
+            textSize = 14f
             setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.parseColor("#72D9EF"))
+            setTextColor(palette.accent)
             gravity = Gravity.CENTER
-            setPadding(0, dp(4), 0, dp(6))
+            setPadding(0, dp(2), 0, dp(6))
         }
         card.addView(sizeTv)
 
-        val seek = SeekBar(this).apply {
-            max = 380 // 180..560
-            progress = (pendingWidth - 180).coerceIn(0, 380)
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) {
-                    pendingWidth = (p + 180).coerceIn(180, 560)
-                    sizeTv.text = "العرض: ${formatArabicNumber(pendingWidth)} dp"
-                }
-                override fun onStartTrackingTouch(sb: SeekBar?) {}
-                override fun onStopTrackingTouch(sb: SeekBar?) {}
-            })
+        val presetsRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutDirection = View.LAYOUT_DIRECTION_LTR
+            setPadding(0, 0, 0, dp(8))
         }
-        card.addView(seek)
 
-        val applyBtn = Button(this).apply {
-            text = "تطبيق العرض"
-            isAllCaps = false
-            setTextColor(Color.WHITE)
-            background = GradientDrawable().apply {
-                setColor(Color.parseColor("#006A87"))
-                cornerRadius = dp(12).toFloat()
+        val seek = SeekBar(this).apply {
+            max = (maxW - 180).coerceAtLeast(40)
+            progress = (pendingWidth - 180).coerceIn(0, max)
+            progressTintList = ColorStateList.valueOf(palette.accent)
+            thumbTintList = ColorStateList.valueOf(palette.accent)
+        }
+
+        fun syncWidthUi(newWidth: Int) {
+            pendingWidth = newWidth.coerceIn(180, maxW)
+            sizeTv.text = "العرض: ${formatArabicNumber(pendingWidth)} dp"
+            val targetProgress = (pendingWidth - 180).coerceIn(0, seek.max)
+            if (seek.progress != targetProgress) {
+                seek.progress = targetProgress
             }
-            setOnClickListener {
-                prefs = prefs.copy(floatingWidthDp = pendingWidth)
-                serviceScope.launch {
-                    prefsRepo.saveFloatingCustomization(
-                        pendingWidth,
-                        prefs.floatingFrameShape,
-                        prefs.floatingOpacityPercent,
-                        prefs.floatingBubbleSize
-                    )
-                }
-                mode = OverlayMode.BOARD
-                rebuildContent()
+            prefs = prefs.copy(floatingWidthDp = pendingWidth)
+            val lp = card.layoutParams
+            if (lp != null) {
+                lp.width = dp(pendingWidth)
+                card.layoutParams = lp
+                rootView?.let { windowManager.updateViewLayout(it, layoutParams) }
             }
         }
-        card.addView(applyBtn, LinearLayout.LayoutParams(cardWidthPx - dp(12), dp(44)).apply { topMargin = dp(8) })
+
+        val presets = listOf("صغير" to 210, "متوسط" to 270, "كبير" to 350, "عريض" to min(440, maxW))
+        presets.forEachIndexed { idx, (label, targetW) ->
+            val selected = abs(pendingWidth - targetW) <= 22
+            val pill = TextView(this).apply {
+                text = label
+                textSize = 11.5f
+                setTypeface(null, Typeface.BOLD)
+                gravity = Gravity.CENTER
+                setTextColor(if (selected) palette.onAccent else palette.textPrimary)
+                background = createPillDrawable(
+                    fillColor = if (selected) palette.accentContainer else palette.surfacePill,
+                    strokeColor = if (selected) palette.accentContainer else palette.surfacePillStroke,
+                    cornerRadiusPx = dpF(12f),
+                    strokeWidthPx = dp(1)
+                )
+                setPadding(dp(4), dp(6), dp(4), dp(6))
+                setOnClickListener {
+                    syncWidthUi(targetW)
+                }
+            }
+            presetsRow.addView(
+                pill,
+                LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    if (idx < presets.lastIndex) marginEnd = dp(4)
+                }
+            )
+        }
+        card.addView(presetsRow)
+
+        seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) {
+                if (fromUser) {
+                    syncWidthUi(p + 180)
+                }
+            }
+            override fun onStartTrackingTouch(sb: SeekBar?) {}
+            override fun onStopTrackingTouch(sb: SeekBar?) {}
+        })
+        card.addView(seek, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+
+        // -  range  + controls matching reference screenshot style
+        val stepRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutDirection = View.LAYOUT_DIRECTION_LTR
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(4), 0, dp(8))
+        }
+        val minusBtn = pillIconButton(OverlayIconType.MINUS, palette, heightDp = 34) {
+            syncWidthUi(pendingWidth - 20)
+        }
+        val rangeLabel = TextView(this).apply {
+            text = "${formatArabicNumber(180)} — ${formatArabicNumber(maxW)} dp"
+            textSize = 11f
+            setTextColor(palette.textSecondary)
+            gravity = Gravity.CENTER
+        }
+        val plusBtn = pillIconButton(OverlayIconType.PLUS, palette, heightDp = 34) {
+            syncWidthUi(pendingWidth + 20)
+        }
+        stepRow.addView(minusBtn, LinearLayout.LayoutParams(dp(42), dp(34)))
+        stepRow.addView(rangeLabel, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        stepRow.addView(plusBtn, LinearLayout.LayoutParams(dp(42), dp(34)))
+        card.addView(stepRow)
+
+        val actionRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutDirection = View.LAYOUT_DIRECTION_LTR
+        }
+        val applyBtn = pillActionButton("تطبيق", palette, isPrimary = true, heightDp = 40) {
+            prefs = prefs.copy(floatingWidthDp = pendingWidth)
+            serviceScope.launch {
+                prefsRepo.saveFloatingCustomization(
+                    pendingWidth,
+                    prefs.floatingFrameShape,
+                    prefs.floatingOpacityPercent,
+                    prefs.floatingBubbleSize
+                )
+            }
+            mode = OverlayMode.BOARD
+            rebuildContent()
+        }
+        val backBtn = pillActionButton("رجوع", palette, isPrimary = false, heightDp = 40) {
+            mode = OverlayMode.BOARD
+            rebuildContent()
+        }
+        actionRow.addView(applyBtn, LinearLayout.LayoutParams(0, dp(40), 1f).apply { marginEnd = dp(6) })
+        actionRow.addView(backBtn, LinearLayout.LayoutParams(0, dp(40), 1f))
+        card.addView(actionRow, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
     }
 
-    private fun buildEditorOverlayUi(card: LinearLayout, cardWidthPx: Int) {
-        buildWizardHeader(card, "محرر الوضعية")
+    private fun buildEditorOverlayUi(card: LinearLayout, cardWidthPx: Int, palette: OverlayPalette) {
+        buildWizardHeader(card, palette, "محرر الوضعية")
         val boardPx = (cardWidthPx - dp(12)).coerceAtMost(dp(240))
+        val boardCorner = (dpF(prefs.floatingFrameShape.cornerDp.toFloat()) - dpF(4f)).coerceAtLeast(0f)
 
         val editorView = FloatingEditorBoardView(this).apply {
-            updateBoard(editorBoard, prefs.boardTheme)
+            updateBoard(editorBoard, prefs.boardTheme, prefs.pieceStyle, boardCorner)
             onSquareTapped = { sq ->
                 val idx = sq.index
                 editorBoard[idx] = if (editorBoard[idx] == editorBrush) null else editorBrush
-                updateBoard(editorBoard, prefs.boardTheme)
+                updateBoard(editorBoard, prefs.boardTheme, prefs.pieceStyle, boardCorner)
             }
         }
         card.addView(editorView, LinearLayout.LayoutParams(boardPx, boardPx).apply {
             gravity = Gravity.CENTER_HORIZONTAL
         })
 
-        // Brush strip (White Q,R,B,N,P / Black Q,R,B,N,P / K / Eraser)
         val paletteRow1 = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(0, dp(4), 0, dp(2))
+            layoutDirection = View.LAYOUT_DIRECTION_LTR
+            setPadding(0, dp(5), 0, dp(2))
         }
         val paletteRow2 = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(0, dp(2), 0, dp(4))
+            layoutDirection = View.LAYOUT_DIRECTION_LTR
+            setPadding(0, dp(2), 0, dp(5))
         }
         val brushes1 = listOf(
             "♔" to ChessPiece(PieceType.KING, PieceColor.WHITE),
@@ -674,24 +1010,31 @@ class FloatingChessService : Service() {
         )
 
         fun populatePalette(row: LinearLayout, items: List<Pair<String, ChessPiece?>>) {
-            items.forEach { (glyph, piece) ->
+            items.forEachIndexed { idx, (glyph, piece) ->
                 val active = editorBrush == piece
                 val tv = TextView(this).apply {
                     text = glyph
                     textSize = 15f
                     gravity = Gravity.CENTER
-                    setTextColor(Color.WHITE)
-                    background = GradientDrawable().apply {
-                        setColor(if (active) Color.parseColor("#006A87") else Color.parseColor("#1E2E4A"))
-                        cornerRadius = dp(8).toFloat()
-                    }
-                    setPadding(dp(4), dp(4), dp(4), dp(4))
+                    setTextColor(if (active) palette.onAccent else palette.textPrimary)
+                    background = createPillDrawable(
+                        fillColor = if (active) palette.accentContainer else palette.surfacePill,
+                        strokeColor = if (active) palette.accentContainer else palette.surfacePillStroke,
+                        cornerRadiusPx = dpF(8f),
+                        strokeWidthPx = dp(1)
+                    )
+                    setPadding(dp(2), dp(4), dp(2), dp(4))
                     setOnClickListener {
                         editorBrush = piece
                         rebuildContent()
                     }
                 }
-                row.addView(tv, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(2) })
+                row.addView(
+                    tv,
+                    LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                        if (idx < items.lastIndex) marginEnd = dp(3)
+                    }
+                )
             }
         }
         populatePalette(paletteRow1, brushes1)
@@ -701,133 +1044,121 @@ class FloatingChessService : Service() {
 
         val turnRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(0, 0, 0, dp(4))
+            layoutDirection = View.LAYOUT_DIRECTION_LTR
         }
-        val turnBtn = Button(this).apply {
-            text = if (editorTurn == PieceColor.WHITE) "الدور: الأبيض" else "الدور: الأسود"
-            isAllCaps = false
-            textSize = 11f
-            setTextColor(Color.WHITE)
-            background = GradientDrawable().apply { setColor(Color.parseColor("#1E2E4A")); cornerRadius = dp(10).toFloat() }
-            setOnClickListener {
-                editorTurn = editorTurn.opposite()
+        val turnBtn = pillActionButton(
+            label = if (editorTurn == PieceColor.WHITE) "الدور: الأبيض" else "الدور: الأسود",
+            palette = palette,
+            isPrimary = false,
+            heightDp = 38
+        ) {
+            editorTurn = editorTurn.opposite()
+            rebuildContent()
+        }
+        val applyBtn = pillActionButton("تطبيق واللعب", palette, isPrimary = true, heightDp = 38) {
+            val fen = buildFenFromArray(editorBoard, editorTurn)
+            val parsed = ChessBoardState.fromFen(fen)
+            if (parsed.findKing(PieceColor.WHITE) != null && parsed.findKing(PieceColor.BLACK) != null) {
+                boardState = parsed
+                moveStack.clear()
+                selectedSquare = null
+                legalForSelected = emptyList()
+                lastMove = null
+                mode = OverlayMode.BOARD
                 rebuildContent()
-            }
-        }
-        val applyBtn = Button(this).apply {
-            text = "تطبيق واللعب"
-            isAllCaps = false
-            textSize = 11f
-            setTextColor(Color.WHITE)
-            background = GradientDrawable().apply { setColor(Color.parseColor("#006A87")); cornerRadius = dp(10).toFloat() }
-            setOnClickListener {
-                val fen = buildFenFromArray(editorBoard, editorTurn)
-                val parsed = ChessBoardState.fromFen(fen)
-                if (parsed.findKing(PieceColor.WHITE) != null && parsed.findKing(PieceColor.BLACK) != null) {
-                    boardState = parsed
-                    moveStack.clear()
-                    selectedSquare = null
-                    legalForSelected = emptyList()
-                    lastMove = null
-                    mode = OverlayMode.BOARD
-                    rebuildContent()
-                    if (boardState.turn != playerColor && boardState.evaluateGameResult() == GameResult.ONGOING) {
-                        triggerEngineReply()
-                    }
+                if (boardState.turn != playerColor && boardState.evaluateGameResult() == GameResult.ONGOING) {
+                    triggerEngineReply()
                 }
             }
         }
-        turnRow.addView(turnBtn, LinearLayout.LayoutParams(0, dp(40), 1f).apply { marginEnd = dp(4) })
-        turnRow.addView(applyBtn, LinearLayout.LayoutParams(0, dp(40), 1f))
+        turnRow.addView(turnBtn, LinearLayout.LayoutParams(0, dp(38), 1f).apply { marginEnd = dp(5) })
+        turnRow.addView(applyBtn, LinearLayout.LayoutParams(0, dp(38), 1f))
         card.addView(turnRow)
     }
 
-    private fun buildWizardHeader(card: LinearLayout, heading: String = "مباراة عائمة") {
+    private fun buildWizardHeader(card: LinearLayout, palette: OverlayPalette, heading: String = "مباراة عائمة") {
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
+            layoutDirection = View.LAYOUT_DIRECTION_LTR
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(4), dp(2), dp(4), dp(8))
+            setPadding(dp(2), dp(2), dp(2), dp(8))
         }
-        val closeBtn = TextView(this).apply {
-            text = "✕"
-            textSize = 14f
-            gravity = Gravity.CENTER
-            setTextColor(Color.parseColor("#F1F5FA"))
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(Color.parseColor("#1E2E4A"))
-            }
-            setPadding(dp(8), dp(4), dp(8), dp(4))
-            setOnClickListener {
-                mode = OverlayMode.BOARD
-                rebuildContent()
-            }
+        val closeBtn = pillIconButton(OverlayIconType.CLOSE_X, palette, heightDp = 32) {
+            mode = OverlayMode.BOARD
+            rebuildContent()
         }
         val title = TextView(this).apply {
             text = heading
-            textSize = 13f
+            textSize = 13.5f
             setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.parseColor("#F1F5FA"))
+            setTextColor(palette.textPrimary)
             gravity = Gravity.CENTER
         }
-        val drag = TextView(this).apply {
-            text = "⋮⋮"
-            textSize = 14f
-            gravity = Gravity.CENTER
-            setTextColor(Color.parseColor("#72D9EF"))
-            setPadding(dp(6), dp(4), dp(6), dp(4))
+        val drag = FrameLayout(this).apply {
+            addView(
+                OverlayVectorIconView(this@FloatingChessService, OverlayIconType.DRAG_GRIP, palette.accent),
+                FrameLayout.LayoutParams(dp(20), dp(20), Gravity.CENTER)
+            )
         }
         attachDragAndClick(drag, onClick = null)
 
-        header.addView(closeBtn)
+        header.addView(closeBtn, LinearLayout.LayoutParams(dp(44), dp(32)))
         header.addView(title, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        header.addView(drag)
+        header.addView(drag, LinearLayout.LayoutParams(dp(36), dp(32)))
         card.addView(header)
     }
 
-    private fun buildWizardStep1Ui(card: LinearLayout, cardWidthPx: Int) {
-        buildWizardHeader(card)
+    private fun buildWizardStep1Ui(card: LinearLayout, cardWidthPx: Int, palette: OverlayPalette) {
+        buildWizardHeader(card, palette)
         val stepTv = TextView(this).apply {
             text = "الخطوة ١ من ٢"
             textSize = 11f
-            setTextColor(Color.parseColor("#72D9EF"))
+            setTextColor(palette.accent)
             setTypeface(null, Typeface.BOLD)
             gravity = Gravity.END
         }
         val titleTv = TextView(this).apply {
             text = "اختر لونك"
-            textSize = 17f
+            textSize = 18f
             setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.parseColor("#F1F5FA"))
+            setTextColor(palette.textPrimary)
             gravity = Gravity.END
-            setPadding(0, dp(2), 0, dp(6))
+            setPadding(0, dp(2), 0, dp(4))
+        }
+        val descTv = TextView(this).apply {
+            text = "تبدأ المباراة من النافذة العائمة."
+            textSize = 12f
+            setTextColor(palette.textSecondary)
+            gravity = Gravity.END
+            setPadding(0, 0, 0, dp(10))
         }
         card.addView(stepTv)
         card.addView(titleTv)
+        card.addView(descTv)
 
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
+            layoutDirection = View.LAYOUT_DIRECTION_LTR
             gravity = Gravity.CENTER
         }
-        fun colorChoice(label: String, icon: String, selected: Boolean, onClick: () -> Unit): Button {
-            return Button(this).apply {
-                text = "$label  $icon"
-                isAllCaps = false
-                setTextColor(Color.WHITE)
-                background = GradientDrawable().apply {
-                    setColor(if (selected) Color.parseColor("#006A87") else Color.parseColor("#1E2E4A"))
-                    cornerRadius = dp(12).toFloat()
-                    setStroke(dp(1), Color.parseColor("#72D9EF"))
-                }
-                setOnClickListener { onClick() }
-            }
-        }
-        val blackBtn = colorChoice("أسود", "♚", wizardColor == PieceColor.BLACK) {
+        val blackBtn = pillActionButton(
+            label = "أسود",
+            palette = palette,
+            isPrimary = false,
+            iconType = OverlayIconType.KING_OUTLINE,
+            heightDp = 44
+        ) {
             wizardColor = PieceColor.BLACK
             mode = OverlayMode.WIZARD_STEP2
             rebuildContent()
         }
-        val whiteBtn = colorChoice("أبيض", "♔", wizardColor == PieceColor.WHITE) {
+        val whiteBtn = pillActionButton(
+            label = "أبيض",
+            palette = palette,
+            isPrimary = true,
+            iconType = OverlayIconType.KING_OUTLINE,
+            heightDp = 44
+        ) {
             wizardColor = PieceColor.WHITE
             mode = OverlayMode.WIZARD_STEP2
             rebuildContent()
@@ -837,59 +1168,60 @@ class FloatingChessService : Service() {
         card.addView(row, LinearLayout.LayoutParams(cardWidthPx - dp(12), LinearLayout.LayoutParams.WRAP_CONTENT))
     }
 
-    private fun buildWizardStep2Ui(card: LinearLayout, cardWidthPx: Int) {
-        buildWizardHeader(card)
+    private fun buildWizardStep2Ui(card: LinearLayout, cardWidthPx: Int, palette: OverlayPalette) {
+        buildWizardHeader(card, palette)
         val stepTv = TextView(this).apply {
             text = "الخطوة ٢ من ٢"
             textSize = 11f
-            setTextColor(Color.parseColor("#72D9EF"))
+            setTextColor(palette.accent)
             setTypeface(null, Typeface.BOLD)
+            gravity = Gravity.END
+        }
+        val headingTv = TextView(this).apply {
+            text = "اضبط الخصم"
+            textSize = 17f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(palette.textPrimary)
             gravity = Gravity.END
         }
         val sideNoteTv = TextView(this).apply {
             text = "ستُلعب المباراة ب${if (wizardColor == PieceColor.WHITE) "الأبيض" else "الأسود"}"
             textSize = 12f
-            setTextColor(Color.parseColor("#CBD5E1"))
+            setTextColor(palette.textSecondary)
             gravity = Gravity.END
-            setPadding(0, dp(2), 0, dp(6))
+            setPadding(0, dp(2), 0, dp(8))
         }
         card.addView(stepTv)
+        card.addView(headingTv)
         card.addView(sideNoteTv)
 
-        val personalityBtn = Button(this).apply {
-            text = "الشخصية: ${wizardPersonality.nameAr}"
-            isAllCaps = false
-            setTextColor(Color.WHITE)
-            background = GradientDrawable().apply {
-                setColor(Color.parseColor("#1E2E4A"))
-                cornerRadius = dp(12).toFloat()
-            }
-            setOnClickListener {
-                val all = EnginePersonality.entries
-                val nextIdx = (all.indexOf(wizardPersonality) + 1) % all.size
-                wizardPersonality = all[nextIdx]
-                rebuildContent()
-            }
+        val personalityBtn = pillActionButton(wizardPersonality.nameAr, palette, isPrimary = false, heightDp = 40) {
+            val all = EnginePersonality.entries
+            val nextIdx = (all.indexOf(wizardPersonality) + 1) % all.size
+            wizardPersonality = all[nextIdx]
+            rebuildContent()
         }
-        card.addView(personalityBtn, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(44)).apply {
-            bottomMargin = dp(6)
+        card.addView(personalityBtn, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(40)).apply {
+            bottomMargin = dp(8)
         })
 
-        fun eloLabel(): String = if (wizardElo <= 0) "أقصى • بلا حد" else "نحو ${formatArabicNumber(wizardElo)} إيلو"
+        fun eloLabel(): String = if (wizardElo <= 0) "أقصى • بلا حد" else "${StrengthTier.fromElo(wizardElo).nameAr} • نحو ${formatArabicNumber(wizardElo)} إيلو"
 
         val eloTv = TextView(this).apply {
             text = eloLabel()
-            textSize = 12f
+            textSize = 12.5f
             setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.parseColor("#72D9EF"))
-            gravity = Gravity.CENTER
+            setTextColor(palette.accent)
+            gravity = Gravity.END
             setPadding(0, 0, 0, dp(4))
         }
         card.addView(eloTv)
 
         val seek = SeekBar(this).apply {
-            max = 2850 // 200..3000 + 3050 => unlimited
+            max = 2850
             progress = if (wizardElo <= 0) 2850 else (wizardElo - 200).coerceIn(0, 2800)
+            progressTintList = ColorStateList.valueOf(palette.accent)
+            thumbTintList = ColorStateList.valueOf(palette.accent)
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) {
                     wizardElo = if (p > 2800) -1 else StrengthTier.snapElo(p + 200)
@@ -901,53 +1233,68 @@ class FloatingChessService : Service() {
         }
         card.addView(seek)
 
+        val stepRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutDirection = View.LAYOUT_DIRECTION_LTR
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(4), 0, dp(8))
+        }
+        val minusBtn = pillIconButton(OverlayIconType.MINUS, palette, heightDp = 34) {
+            val cur = if (wizardElo <= 0) 3000 else wizardElo
+            wizardElo = StrengthTier.snapElo((cur - 100).coerceAtLeast(200))
+            seek.progress = (wizardElo - 200).coerceIn(0, 2800)
+            eloTv.text = eloLabel()
+        }
+        val rangeTv = TextView(this).apply {
+            text = "${formatArabicNumber(200)} — ${formatArabicNumber(3000)}"
+            textSize = 11f
+            setTextColor(palette.textSecondary)
+            gravity = Gravity.CENTER
+        }
+        val plusBtn = pillIconButton(OverlayIconType.PLUS, palette, heightDp = 34) {
+            if (wizardElo in 1 until 3000) {
+                wizardElo = StrengthTier.snapElo((wizardElo + 100).coerceAtMost(3000))
+                seek.progress = (wizardElo - 200).coerceIn(0, 2800)
+            } else {
+                wizardElo = -1
+                seek.progress = 2850
+            }
+            eloTv.text = eloLabel()
+        }
+        stepRow.addView(minusBtn, LinearLayout.LayoutParams(dp(44), dp(34)))
+        stepRow.addView(rangeTv, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        stepRow.addView(plusBtn, LinearLayout.LayoutParams(dp(44), dp(34)))
+        card.addView(stepRow)
+
         val actionRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(0, dp(6), 0, 0)
+            layoutDirection = View.LAYOUT_DIRECTION_LTR
         }
-        val startBtn = Button(this).apply {
-            text = "ابدأ المباراة"
-            isAllCaps = false
-            setTextColor(Color.WHITE)
-            background = GradientDrawable().apply {
-                setColor(Color.parseColor("#006A87"))
-                cornerRadius = dp(12).toFloat()
+        val startBtn = pillActionButton("ابدأ المباراة", palette, isPrimary = true, heightDp = 42) {
+            playerColor = wizardColor
+            flipped = playerColor == PieceColor.BLACK
+            boardState = ChessBoardState.initial()
+            moveStack.clear()
+            selectedSquare = null
+            legalForSelected = emptyList()
+            lastMove = null
+            mode = OverlayMode.BOARD
+            serviceScope.launch {
+                if (wizardElo <= 0) {
+                    prefsRepo.setStrengthTier(StrengthTier.MAX)
+                } else {
+                    prefsRepo.setCustomEngineElo(wizardElo)
+                }
+                prefsRepo.setEnginePersonality(wizardPersonality)
             }
-            setOnClickListener {
-                playerColor = wizardColor
-                flipped = playerColor == PieceColor.BLACK
-                boardState = ChessBoardState.initial()
-                moveStack.clear()
-                selectedSquare = null
-                legalForSelected = emptyList()
-                lastMove = null
-                mode = OverlayMode.BOARD
-                serviceScope.launch {
-                    if (wizardElo <= 0) {
-                        prefsRepo.setStrengthTier(StrengthTier.MAX)
-                    } else {
-                        prefsRepo.setCustomEngineElo(wizardElo)
-                    }
-                    prefsRepo.setEnginePersonality(wizardPersonality)
-                }
-                rebuildContent()
-                if (playerColor == PieceColor.BLACK) {
-                    triggerEngineReply()
-                }
+            rebuildContent()
+            if (playerColor == PieceColor.BLACK) {
+                triggerEngineReply()
             }
         }
-        val backBtn = Button(this).apply {
-            text = "رجوع"
-            isAllCaps = false
-            setTextColor(Color.WHITE)
-            background = GradientDrawable().apply {
-                setColor(Color.parseColor("#1E2E4A"))
-                cornerRadius = dp(12).toFloat()
-            }
-            setOnClickListener {
-                mode = OverlayMode.WIZARD_STEP1
-                rebuildContent()
-            }
+        val backBtn = pillActionButton("رجوع", palette, isPrimary = false, heightDp = 42) {
+            mode = OverlayMode.WIZARD_STEP1
+            rebuildContent()
         }
         actionRow.addView(startBtn, LinearLayout.LayoutParams(0, dp(42), 1f).apply { marginEnd = dp(6) })
         actionRow.addView(backBtn, LinearLayout.LayoutParams(0, dp(42), 1f))
@@ -1098,30 +1445,55 @@ class FloatingChessService : Service() {
         }
     }
 
-    private fun attachCornerResizeHandle(handle: View) {
-        var startWidthDp = prefs.floatingWidthDp
+    /**
+     * Smooth flicker-free corner resize: updates card and chessboard dimensions directly
+     * during ACTION_MOVE without recreating the view hierarchy, persisting on ACTION_UP.
+     */
+    private fun attachCornerResizeHandle(
+        handle: View,
+        card: LinearLayout,
+        boardView: View,
+        footer: View,
+        innerPadPx: Int
+    ) {
+        var startWidthDp = clampedWidthDp()
         var touchStartX = 0f
         var touchStartY = 0f
         handle.setOnTouchListener { _, event ->
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
-                    startWidthDp = prefs.floatingWidthDp
+                    startWidthDp = clampedWidthDp()
                     touchStartX = event.rawX
                     touchStartY = event.rawY
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    val deltaPx = ((event.rawX - touchStartX) + (event.rawY - touchStartY)) / 2f
+                    val deltaPx = ((event.rawX - touchStartX) + (event.rawY - touchStartY)) * 0.55f
                     val deltaDp = (deltaPx / resources.displayMetrics.density).roundToInt()
-                    val nextWidth = (startWidthDp + deltaDp).coerceIn(180, 560)
-                    if (abs(nextWidth - prefs.floatingWidthDp) >= 6) {
+                    val nextWidth = (startWidthDp + deltaDp).coerceIn(180, maxAllowedWidthDp())
+                    if (nextWidth != prefs.floatingWidthDp) {
                         prefs = prefs.copy(floatingWidthDp = nextWidth)
-                        rebuildContent()
+                        val nextCardPx = dp(nextWidth)
+                        val nextBoardPx = (nextCardPx - innerPadPx).coerceAtLeast(dp(150))
+                        card.layoutParams = (card.layoutParams as FrameLayout.LayoutParams).apply {
+                            width = nextCardPx
+                        }
+                        boardView.layoutParams = (boardView.layoutParams as LinearLayout.LayoutParams).apply {
+                            width = nextBoardPx
+                            height = nextBoardPx
+                        }
+                        footer.layoutParams = (footer.layoutParams as LinearLayout.LayoutParams).apply {
+                            width = nextBoardPx
+                        }
+                        rootView?.let { rv ->
+                            layoutParams?.let { lp -> windowManager.updateViewLayout(rv, lp) }
+                        }
                     }
                     true
                 }
                 MotionEvent.ACTION_UP -> {
-                    val finalWidth = prefs.floatingWidthDp.coerceIn(180, 560)
+                    val finalWidth = clampedWidthDp()
+                    rebuildContent()
                     serviceScope.launch {
                         prefsRepo.saveFloatingCustomization(
                             finalWidth,
@@ -1178,217 +1550,4 @@ class FloatingChessService : Service() {
             }
         }
     }
-}
-
-private class FloatingBoardCanvasView(context: Context) : View(context) {
-    private var boardState: ChessBoardState = ChessBoardState.initial()
-    private var boardTheme: BoardTheme = BoardTheme.TOURNAMENT_EMERALD
-    private var flipped: Boolean = false
-    private var selected: Square? = null
-    private var legalTargets: Set<Square> = emptySet()
-    private var lastMove: ChessMove? = null
-    private var useRings: Boolean = false
-    private var legalColorInt: Int = Color.parseColor("#72D9EF")
-    private var selectedColorInt: Int = Color.parseColor("#AA006A87")
-
-    var onSquareTapped: ((Square) -> Unit)? = null
-
-    private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
-    private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign = Paint.Align.CENTER }
-    private val strokeTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        textAlign = Paint.Align.CENTER
-        style = Paint.Style.STROKE
-    }
-
-    fun updateState(
-        state: ChessBoardState,
-        theme: BoardTheme,
-        flipped: Boolean,
-        selected: Square?,
-        legalTargets: Set<Square>,
-        lastMove: ChessMove?,
-        useRings: Boolean,
-        legalColorInt: Int,
-        selectedColorInt: Int
-    ) {
-        this.boardState = state
-        this.boardTheme = theme
-        this.flipped = flipped
-        this.selected = selected
-        this.legalTargets = legalTargets
-        this.lastMove = lastMove
-        this.useRings = useRings
-        this.legalColorInt = legalColorInt
-        this.selectedColorInt = selectedColorInt
-        invalidate()
-    }
-
-    override fun onDraw(canvas: Canvas) {
-        super.onDraw(canvas)
-        val size = width.coerceAtMost(height).toFloat()
-        if (size <= 0f) return
-        val cell = size / 8f
-
-        val lm = lastMove
-        val lightColor = boardTheme.lightSquare.toArgb()
-        val darkColor = boardTheme.darkSquare.toArgb()
-        val lastMoveColor = boardTheme.lastMoveHighlight.toArgb()
-
-        for (vr in 0..7) {
-            val r = if (flipped) 7 - vr else vr
-            for (vc in 0..7) {
-                val c = if (flipped) 7 - vc else vc
-                val sq = Square(r, c)
-                val isLight = (r + c) % 2 == 0
-                val left = vc * cell
-                val top = vr * cell
-
-                paint.color = if (isLight) lightColor else darkColor
-                canvas.drawRect(left, top, left + cell, top + cell, paint)
-
-                if (selected == sq) {
-                    paint.color = selectedColorInt
-                    canvas.drawRect(left, top, left + cell, top + cell, paint)
-                } else if (lm != null && (lm.from == sq || lm.to == sq)) {
-                    paint.color = lastMoveColor
-                    canvas.drawRect(left, top, left + cell, top + cell, paint)
-                }
-
-                if (vc == 0) {
-                    paint.color = if (isLight) darkColor else lightColor
-                    paint.textSize = cell * 0.22f
-                    paint.textAlign = Paint.Align.LEFT
-                    canvas.drawText("${8 - r}", left + cell * 0.06f, top + cell * 0.25f, paint)
-                }
-                if (vr == 7) {
-                    paint.color = if (isLight) darkColor else lightColor
-                    paint.textSize = cell * 0.22f
-                    paint.textAlign = Paint.Align.RIGHT
-                    canvas.drawText("${'a' + c}", left + cell * 0.94f, top + cell * 0.94f, paint)
-                }
-
-                val piece = boardState.pieceAt(sq)
-                if (piece != null) {
-                    val glyph = unicodePiece(piece)
-                    val cx = left + cell * 0.5f
-                    val cy = top + cell * 0.74f
-                    val pSize = cell * 0.76f
-                    strokeTextPaint.textSize = pSize
-                    strokeTextPaint.strokeWidth = cell * 0.06f
-                    strokeTextPaint.color = if (piece.color == PieceColor.WHITE) Color.parseColor("#1E293B") else Color.WHITE
-                    canvas.drawText(glyph, cx, cy, strokeTextPaint)
-
-                    textPaint.textSize = pSize
-                    textPaint.color = if (piece.color == PieceColor.WHITE) Color.WHITE else Color.parseColor("#0F172A")
-                    canvas.drawText(glyph, cx, cy, textPaint)
-                }
-
-                if (sq in legalTargets) {
-                    val cx = left + cell * 0.5f
-                    val cy = top + cell * 0.5f
-                    if (piece != null) {
-                        ringPaint.color = legalColorInt
-                        ringPaint.strokeWidth = cell * 0.10f
-                        canvas.drawCircle(cx, cy, cell * 0.42f, ringPaint)
-                    } else if (useRings) {
-                        ringPaint.color = legalColorInt
-                        ringPaint.strokeWidth = cell * 0.08f
-                        canvas.drawCircle(cx, cy, cell * 0.22f, ringPaint)
-                    } else {
-                        paint.color = legalColorInt
-                        canvas.drawCircle(cx, cy, cell * 0.16f, paint)
-                    }
-                }
-            }
-        }
-    }
-
-    override fun onTouchEvent(event: MotionEvent): Boolean {
-        if (event.action == MotionEvent.ACTION_UP) {
-            val cell = width / 8f
-            if (cell > 0f) {
-                val vc = (event.x / cell).toInt().coerceIn(0, 7)
-                val vr = (event.y / cell).toInt().coerceIn(0, 7)
-                val c = if (flipped) 7 - vc else vc
-                val r = if (flipped) 7 - vr else vr
-                onSquareTapped?.invoke(Square(r, c))
-                performClick()
-            }
-        }
-        return true
-    }
-
-    override fun performClick(): Boolean = super.performClick()
-
-    private fun unicodePiece(p: ChessPiece): String = when (p.type) {
-        PieceType.KING -> "♚"
-        PieceType.QUEEN -> "♛"
-        PieceType.ROOK -> "♜"
-        PieceType.BISHOP -> "♝"
-        PieceType.KNIGHT -> "♞"
-        PieceType.PAWN -> "♟"
-    }
-}
-
-private class FloatingEditorBoardView(context: Context) : View(context) {
-    private var board: Array<ChessPiece?> = arrayOfNulls(64)
-    private var theme: BoardTheme = BoardTheme.TOURNAMENT_EMERALD
-    var onSquareTapped: ((Square) -> Unit)? = null
-
-    private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign = Paint.Align.CENTER }
-
-    fun updateBoard(arr: Array<ChessPiece?>, boardTheme: BoardTheme) {
-        this.board = arr
-        this.theme = boardTheme
-        invalidate()
-    }
-
-    override fun onDraw(canvas: Canvas) {
-        super.onDraw(canvas)
-        val size = width.coerceAtMost(height).toFloat()
-        if (size <= 0f) return
-        val cell = size / 8f
-        val lightColor = theme.lightSquare.toArgb()
-        val darkColor = theme.darkSquare.toArgb()
-
-        for (r in 0..7) {
-            for (c in 0..7) {
-                val left = c * cell
-                val top = r * cell
-                paint.color = if ((r + c) % 2 == 0) lightColor else darkColor
-                canvas.drawRect(left, top, left + cell, top + cell, paint)
-                val piece = board[r * 8 + c]
-                if (piece != null) {
-                    val glyph = when (piece.type) {
-                        PieceType.KING -> "♚"
-                        PieceType.QUEEN -> "♛"
-                        PieceType.ROOK -> "♜"
-                        PieceType.BISHOP -> "♝"
-                        PieceType.KNIGHT -> "♞"
-                        PieceType.PAWN -> "♟"
-                    }
-                    textPaint.textSize = cell * 0.72f
-                    textPaint.color = if (piece.color == PieceColor.WHITE) Color.WHITE else Color.parseColor("#0F172A")
-                    canvas.drawText(glyph, left + cell * 0.5f, top + cell * 0.74f, textPaint)
-                }
-            }
-        }
-    }
-
-    override fun onTouchEvent(event: MotionEvent): Boolean {
-        if (event.action == MotionEvent.ACTION_UP) {
-            val cell = width / 8f
-            if (cell > 0f) {
-                val c = (event.x / cell).toInt().coerceIn(0, 7)
-                val r = (event.y / cell).toInt().coerceIn(0, 7)
-                onSquareTapped?.invoke(Square(r, c))
-                performClick()
-            }
-        }
-        return true
-    }
-
-    override fun performClick(): Boolean = super.performClick()
 }

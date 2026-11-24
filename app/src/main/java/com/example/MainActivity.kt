@@ -37,21 +37,32 @@ import androidx.compose.material.icons.automirrored.rounded.ShowChart
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.rounded.BarChart
 import androidx.compose.material.icons.rounded.Description
+import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.Extension
 import androidx.compose.material.icons.rounded.Home
+import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.Psychology
 import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.SportsEsports
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.ModalDrawerSheet
+import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.NavigationDrawerItem
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberDrawerState
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -60,7 +71,9 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -227,6 +240,9 @@ private fun EliteChessRoot(
     val syzygyTables by viewModel.syzygyTables.collectAsStateWithLifecycle()
     val syzygyStatusMessage by viewModel.syzygyStatusMessage.collectAsStateWithLifecycle()
 
+    val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+    val coroutineScope = rememberCoroutineScope()
+
     var showBoardCustomizationSheet by remember { mutableStateOf(false) }
     var showFloatingCustomizationSheet by remember { mutableStateOf(false) }
     var showPersonalitySheet by remember { mutableStateOf(false) }
@@ -328,252 +344,421 @@ private fun EliteChessRoot(
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val useRail = maxWidth >= 600.dp
 
-        Scaffold(
-            contentWindowInsets = WindowInsets.safeDrawing,
-            containerColor = MaterialTheme.colorScheme.background
-        ) { innerPadding ->
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding)
-            ) {
-                Row(modifier = Modifier.fillMaxSize()) {
-                    if (useRail) {
-                        NavigationRail(modifier = Modifier.fillMaxHeight()) {
-                            NAV_TABS.forEach { tab ->
-                                val selected = currentRoute == tab.route
-                                NavigationRailItem(
-                                    selected = selected,
-                                    onClick = { navigateTo(tab.route) },
-                                    icon = {
-                                        Icon(
-                                            imageVector = if (selected) tab.selectedIcon else tab.unselectedIcon,
-                                            contentDescription = tab.labelAr
+        ModalNavigationDrawer(
+            drawerState = drawerState,
+            drawerContent = {
+                ModalDrawerSheet {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .verticalScroll(rememberScrollState())
+                            .padding(vertical = 12.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 20.dp, vertical = 12.dp),
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            Text(
+                                text = "رُقعة (Ruqaa)",
+                                style = MaterialTheme.typography.headlineSmall,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                text = "تحليل ولعب أوفلاين • Stockfish 19",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        HorizontalDivider(modifier = Modifier.padding(bottom = 8.dp))
+
+                        NavigationDrawerItem(
+                            label = { Text("العب الشطرنج") },
+                            icon = { Icon(Icons.Rounded.SportsEsports, contentDescription = null) },
+                            selected = currentRoute == ROUTE_HOME,
+                            onClick = {
+                                coroutineScope.launch { drawerState.close() }
+                                navigateTo(ROUTE_HOME)
+                            },
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp)
+                        )
+                        NavigationDrawerItem(
+                            label = { Text("رقعة التحليل") },
+                            icon = { Icon(Icons.Rounded.Psychology, contentDescription = null) },
+                            selected = currentRoute == ROUTE_PLAY,
+                            onClick = {
+                                coroutineScope.launch { drawerState.close() }
+                                navigateTo(ROUTE_PLAY)
+                                viewModel.analyzeDisplayedPositionMultiPv()
+                            },
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp)
+                        )
+                        NavigationDrawerItem(
+                            label = { Text("مركز التحليل") },
+                            icon = { Icon(Icons.AutoMirrored.Rounded.ShowChart, contentDescription = null) },
+                            selected = currentRoute == ROUTE_ANALYSIS,
+                            onClick = {
+                                coroutineScope.launch { drawerState.close() }
+                                navigateTo(ROUTE_ANALYSIS)
+                            },
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp)
+                        )
+                        NavigationDrawerItem(
+                            label = { Text("محرر الرقعة (FEN)") },
+                            icon = { Icon(Icons.Rounded.Edit, contentDescription = null) },
+                            selected = false,
+                            onClick = {
+                                coroutineScope.launch { drawerState.close() }
+                                showFenSetupSheet = true
+                            },
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp)
+                        )
+                        NavigationDrawerItem(
+                            label = { Text("أرشيف المباريات") },
+                            icon = { Icon(Icons.Rounded.Description, contentDescription = null) },
+                            selected = currentRoute == ROUTE_ARCHIVE,
+                            onClick = {
+                                coroutineScope.launch { drawerState.close() }
+                                navigateTo(ROUTE_ARCHIVE)
+                            },
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp)
+                        )
+                        NavigationDrawerItem(
+                            label = { Text("الألغاز والتدريب") },
+                            icon = { Icon(Icons.Rounded.Extension, contentDescription = null) },
+                            selected = currentRoute == ROUTE_PUZZLES,
+                            onClick = {
+                                coroutineScope.launch { drawerState.close() }
+                                navigateTo(ROUTE_PUZZLES)
+                            },
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp)
+                        )
+                        NavigationDrawerItem(
+                            label = { Text("الإحصاءات والتقارير") },
+                            icon = { Icon(Icons.Rounded.BarChart, contentDescription = null) },
+                            selected = currentRoute == ROUTE_STATS,
+                            onClick = {
+                                coroutineScope.launch { drawerState.close() }
+                                navigateTo(ROUTE_STATS)
+                            },
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp)
+                        )
+                        NavigationDrawerItem(
+                            label = { Text("الإعدادات") },
+                            icon = { Icon(Icons.Rounded.Settings, contentDescription = null) },
+                            selected = currentRoute == ROUTE_SETTINGS,
+                            onClick = {
+                                coroutineScope.launch { drawerState.close() }
+                                navigateTo(ROUTE_SETTINGS)
+                            },
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp)
+                        )
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                        NavigationDrawerItem(
+                            label = { Text("حول رُقعة والتراخيص") },
+                            icon = { Icon(Icons.Rounded.Info, contentDescription = null) },
+                            selected = false,
+                            onClick = {
+                                coroutineScope.launch { drawerState.close() }
+                                showAboutDialog = true
+                            },
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp)
+                        )
+                    }
+                }
+            }
+        ) {
+            Scaffold(
+                contentWindowInsets = WindowInsets.safeDrawing,
+                containerColor = MaterialTheme.colorScheme.background
+            ) { innerPadding ->
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(innerPadding)
+                ) {
+                    Row(modifier = Modifier.fillMaxSize()) {
+                        if (useRail) {
+                            NavigationRail(modifier = Modifier.fillMaxHeight()) {
+                                NAV_TABS.forEach { tab ->
+                                    val selected = currentRoute == tab.route
+                                    NavigationRailItem(
+                                        selected = selected,
+                                        onClick = { navigateTo(tab.route) },
+                                        icon = {
+                                            Icon(
+                                                imageVector = if (selected) tab.selectedIcon else tab.unselectedIcon,
+                                                contentDescription = tab.labelAr
+                                            )
+                                        },
+                                        label = { Text(tab.labelAr) },
+                                        modifier = Modifier.testTag(tab.tag)
+                                    )
+                                }
+                            }
+                        }
+
+                        NavHost(
+                            navController = navController,
+                            startDestination = ROUTE_HOME,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            composable(ROUTE_HOME) {
+                                HomeScreen(
+                                    prefs = prefs,
+                                    ongoingGame = ongoingGame,
+                                    onStartCustomMatch = { color, elo, personality, humanStyle, timeControl ->
+                                        viewModel.startCustomEngineMatch(
+                                            playerColor = color,
+                                            targetElo = elo,
+                                            personality = personality,
+                                            humanStyle = humanStyle,
+                                            timeControl = timeControl
+                                        )
+                                        navigateTo(ROUTE_PLAY)
+                                    },
+                                    onStartBotMatch = { bot, color, adaptive, timeControl ->
+                                        viewModel.startNewMatch(bot, color, adaptive, timeControl)
+                                        navigateTo(ROUTE_PLAY)
+                                    },
+                                    onStartLocalMatch = { timeControl ->
+                                        viewModel.startLocalTwoPlayerMatch(timeControl = timeControl)
+                                        navigateTo(ROUTE_PLAY)
+                                    },
+                                    onResumeGame = { saved ->
+                                        viewModel.resumeSavedGame(saved)
+                                        navigateTo(ROUTE_PLAY)
+                                    },
+                                    onActivateFloatingWindow = {
+                                        requestOrLaunchFloatingOverlay(
+                                            fen = ongoingGame?.currentFen ?: matchState.boardState.toFen(),
+                                            color = matchState.playerColor
                                         )
                                     },
-                                    label = { Text(tab.labelAr) },
-                                    modifier = Modifier.testTag(tab.tag)
+                                    onOpenImportDialog = { showImportDialog = true },
+                                    onOpenDailyPuzzle = {
+                                        viewModel.loadDailyPuzzle()
+                                        navigateTo(ROUTE_PUZZLES)
+                                    },
+                                    onOpenStats = { navigateTo(ROUTE_STATS) },
+                                    onOpenAboutLicenses = { showAboutDialog = true },
+                                    onOpenPersonalitySheet = { showPersonalitySheet = true },
+                                    onOpenDrawer = { coroutineScope.launch { drawerState.open() } }
+                                )
+                            }
+
+                            composable(ROUTE_ARCHIVE) {
+                                ArchiveScreen(
+                                    allGames = allGames,
+                                    prefs = prefs,
+                                    onOpenStats = { navigateTo(ROUTE_STATS) },
+                                    onOpenGame = { saved ->
+                                        viewModel.resumeSavedGame(saved)
+                                        navigateTo(ROUTE_PLAY)
+                                    },
+                                    onDeleteGame = { id -> viewModel.discardOngoingGame(id) }
+                                )
+                            }
+
+                            composable(ROUTE_ANALYSIS) {
+                                AnalysisScreen(
+                                    matchState = matchState,
+                                    onOpenFenSetup = { showFenSetupSheet = true },
+                                    onAnalyzeCurrentMatch = {
+                                        if (matchState.recordedMoves.isNotEmpty() && !matchState.isReviewingPastMove) {
+                                            viewModel.selectReviewMove(matchState.recordedMoves.lastIndex)
+                                        }
+                                        navigateTo(ROUTE_PLAY)
+                                    },
+                                    onAnalyzeMultiPvPosition = {
+                                        navigateTo(ROUTE_PLAY)
+                                        viewModel.analyzeDisplayedPositionMultiPv()
+                                    },
+                                    onOpenImportDialog = { showImportDialog = true },
+                                    onOpenPuzzles = { navigateTo(ROUTE_PUZZLES) },
+                                    onOpenSavedArchive = { navigateTo(ROUTE_ARCHIVE) }
+                                )
+                            }
+
+                            composable(ROUTE_SETTINGS) {
+                                SettingsScreen(
+                                    prefs = prefs,
+                                    stockfishStatus = stockfishStatus,
+                                    syzygyTables = syzygyTables,
+                                    syzygyStatusMessage = syzygyStatusMessage,
+                                    onSelectThemeMode = { viewModel.setThemeMode(it) },
+                                    onSelectBoardTheme = { viewModel.setBoardTheme(it) },
+                                    onOpenBoardCustomization = { showBoardCustomizationSheet = true },
+                                    onSelectStrengthTier = { viewModel.setStrengthTier(it) },
+                                    onOpenEngineEloDialog = { showEngineEloDialog = true },
+                                    onToggleHumanStyle = { viewModel.setHumanStyleEnabled(it) },
+                                    onOpenPersonalitySheet = { showPersonalitySheet = true },
+                                    onSelectEngineBackend = { viewModel.setEngineBackendPreference(it) },
+                                    onSelectStockfishMoveTime = { viewModel.setStockfishMoveTimeMs(it) },
+                                    onRefreshStockfish = { viewModel.refreshStockfishProbe() },
+                                    onToggleEvalBar = { viewModel.setShowEvalBar(it) },
+                                    onToggleFloatingAutoShow = { viewModel.setFloatingAutoShow(it) },
+                                    onOpenFloatingNow = {
+                                        requestOrLaunchFloatingOverlay(
+                                            fen = matchState.boardState.toFen(),
+                                            color = matchState.playerColor
+                                        )
+                                    },
+                                    onOpenFloatingCustomization = { showFloatingCustomizationSheet = true },
+                                    onToggleSound = { viewModel.setSoundEnabled(it) },
+                                    onSelectSoundProfile = { viewModel.setSoundProfile(it) },
+                                    onPreviewSoundProfile = { viewModel.previewSoundProfile(it) },
+                                    onChangeSoundVolume = { viewModel.setSoundVolume(it) },
+                                    onToggleHaptics = { viewModel.setHapticsEnabled(it) },
+                                    onSelectVibrationStyle = { viewModel.setVibrationStyle(it) },
+                                    onToggleAutoReview = { viewModel.setAutoReviewAfterGame(it) },
+                                    onUpdateReminders = { enabled, hr, min ->
+                                        viewModel.updateReminderSettings(enabled, hr, min)
+                                    },
+                                    onTestNotification = { viewModel.sendTestNotification() },
+                                    onImportSyzygyFiles = { uris -> viewModel.importSyzygyFiles(uris) },
+                                    onDeleteSyzygyTable = { name -> viewModel.deleteSyzygyTable(name) },
+                                    onClearSyzygyTables = { viewModel.clearSyzygyTables() },
+                                    onOpenAboutLicenses = { showAboutDialog = true },
+                                    onSelectStockfishThreads = { viewModel.setStockfishThreads(it) },
+                                    onSelectStockfishHashMb = { viewModel.setStockfishHashMb(it) },
+                                    onTogglePowerSaving = { viewModel.setPowerSavingMode(it) },
+                                    onSelectEvalBarPosition = { viewModel.setEvalBarPosition(it) },
+                                    onToggleShowEngineArrows = { viewModel.setShowEngineArrowsOnBoard(it) },
+                                    onSelectAnalysisMultiPvCount = { viewModel.setAnalysisMultiPvCount(it) },
+                                    onTogglePremove = { viewModel.setPremoveEnabled(it) },
+                                    onToggleUnassisted = { viewModel.setUnassistedMode(it) },
+                                    onToggleShowThreats = { viewModel.setShowThreats(it) },
+                                    onToggleBotResign = { viewModel.setBotResignEnabled(it) },
+                                    onTogglePauseOnBlunder = { viewModel.setPauseOnBlunder(it) },
+                                    onTogglePauseOnMistake = { viewModel.setPauseOnMistake(it) },
+                                    onToggleShowMyMoveStrength = { viewModel.setShowMyMoveStrength(it) },
+                                    onToggleShowOpponentMoveStrength = { viewModel.setShowOpponentMoveStrength(it) },
+                                    onToggleShowMultiPvNumbers = { viewModel.setShowMultiPvArrowNumbers(it) },
+                                    onToggleArrowStrengthColors = { viewModel.setArrowStrengthColors(it) },
+                                    onTogglePreviousBestGhostArrow = { viewModel.setShowPreviousBestGhostArrow(it) },
+                                    onToggleColorLastMoveByQuality = { viewModel.setColorLastMoveByQuality(it) },
+                                    onToggleFigurineNotation = { viewModel.setFigurineNotation(it) },
+                                    onToggleShowCapturedPieces = { viewModel.setShowCapturedPieces(it) },
+                                    onToggleShowCoordinates = { viewModel.setShowCoordinates(it) },
+                                    onToggleTapOnlyDisableDrag = { viewModel.setTapOnlyDisableDrag(it) },
+                                    onToggleEnlargeOnDrag = { viewModel.setEnlargeOnDrag(it) },
+                                    onToggleShowAverageCplInReport = { viewModel.setShowAverageCplInReport(it) },
+                                    onChangeBoardScalePercent = { viewModel.setBoardScalePercent(it) }
+                                )
+                            }
+
+                            composable(ROUTE_PLAY) {
+                                PlayScreen(
+                                    matchState = matchState,
+                                    prefs = prefs,
+                                    onNavigateBack = { navController.popBackStack() },
+                                    onSquareClick = { viewModel.onMatchSquareClick(it) },
+                                    onSelectPromotion = { viewModel.selectPromotion(it) },
+                                    onDismissPromotion = { viewModel.dismissPromotion() },
+                                    onRequestHint = { viewModel.requestHint() },
+                                    onUndo = { viewModel.undoLastTurn() },
+                                    onFlipBoard = { viewModel.toggleBoardFlip() },
+                                    onResign = { viewModel.resignMatch() },
+                                    onClaimDraw = { viewModel.claimDraw() },
+                                    onSelectReviewMove = { viewModel.selectReviewMove(it) },
+                                    onOpenMoveLedger = { viewModel.openMoveLedgerSheet() },
+                                    onDismissMoveLedger = { viewModel.dismissMoveLedgerSheet() },
+                                    onOpenPostGameSheet = { viewModel.openPostGameSheet() },
+                                    onDismissPostGameSheet = { viewModel.dismissPostGameSheet() },
+                                    onStartOrResumeFullReview = { viewModel.startOrResumeFullReview() },
+                                    onPauseFullReview = { viewModel.pauseFullReview() },
+                                    onAnalyzeMultiPv = { viewModel.analyzeDisplayedPositionMultiPv() },
+                                    onExportPgn = { exportMatchPgnFile() },
+                                    onStartRematch = {
+                                        when (matchState.gameMode) {
+                                            GameMode.LOCAL_TWO_PLAYER -> viewModel.startLocalTwoPlayerMatch(
+                                                timeControl = matchState.timeControl,
+                                                startFen = matchState.customStartFen,
+                                                edited = matchState.editedPosition
+                                            )
+                                            GameMode.VS_ENGINE -> viewModel.startCustomEngineMatch(
+                                                playerColor = matchState.playerColor,
+                                                targetElo = matchState.customEngineElo,
+                                                personality = matchState.customPersonality,
+                                                humanStyle = matchState.humanStyle,
+                                                timeControl = matchState.timeControl,
+                                                startFen = matchState.customStartFen,
+                                                edited = matchState.editedPosition
+                                            )
+                                            GameMode.VS_BOT_PERSONA -> viewModel.startNewMatch(
+                                                bot = matchState.bot,
+                                                playerColor = matchState.playerColor,
+                                                adaptiveMode = prefs.adaptiveMode,
+                                                timeControl = matchState.timeControl
+                                            )
+                                        }
+                                    },
+                                    onToggleEvalBar = { viewModel.setShowEvalBar(it) },
+                                    onOpenInFloatingWindow = { fen, color ->
+                                        requestOrLaunchFloatingOverlay(fen, color)
+                                    },
+                                    onForceReanalyze = { viewModel.forceReanalyzeGame() },
+                                    onToggleReportVisibility = { viewModel.toggleMatchReportVisibility() },
+                                    onPlayFromHere = { viewModel.playFromReviewPosition() },
+                                    onDismissPauseAlert = { viewModel.dismissPauseAlert() },
+                                    onUndoFromPauseAlert = { viewModel.undoFromPauseAlert() },
+                                    onToggleShowThreats = { viewModel.setShowThreats(it) },
+                                    onSetPremove = { viewModel.setPremoveEnabled(it) },
+                                    onSetUnassisted = { viewModel.setUnassistedMode(it) },
+                                    onSetBotResign = { viewModel.setBotResignEnabled(it) },
+                                    onSetPauseBlunder = { viewModel.setPauseOnBlunder(it) },
+                                    onSetPauseMistake = { viewModel.setPauseOnMistake(it) },
+                                    onSetShowMyStrength = { viewModel.setShowMyMoveStrength(it) },
+                                    onSetShowOppStrength = { viewModel.setShowOpponentMoveStrength(it) },
+                                    onSetEvalBarPosition = { viewModel.setEvalBarPosition(it) },
+                                    engineTelemetry = lastEngineTelemetry
+                                )
+                            }
+
+                            composable(ROUTE_PUZZLES) {
+                                PuzzlesScreen(
+                                    puzzleState = puzzleState,
+                                    prefs = prefs,
+                                    solvedRecords = puzzleRecords,
+                                    onSquareClick = { viewModel.onPuzzleSquareClick(it) },
+                                    onShowHint = { viewModel.showPuzzleHint() },
+                                    onResetPuzzle = { viewModel.loadPuzzle(puzzleState.puzzle, puzzleState.isDaily) },
+                                    onSelectPuzzle = { puzzle, isDaily -> viewModel.loadPuzzle(puzzle, isDaily) }
+                                )
+                            }
+
+                            composable(ROUTE_STATS) {
+                                StatsScreen(
+                                    prefs = prefs,
+                                    selectedPeriod = selectedPeriod,
+                                    periodicReport = periodicReport,
+                                    ratingHistory = ratingHistory,
+                                    completedGames = completedGames,
+                                    achievements = achievements,
+                                    unassistedOnly = unassistedStatsOnly,
+                                    engineStatsSummary = engineStatsSummary,
+                                    onSelectPeriod = { viewModel.selectReportPeriod(it) },
+                                    onToggleUnassistedOnly = { viewModel.setUnassistedStatsOnly(it) },
+                                    onReviewSavedGame = { saved ->
+                                        viewModel.resumeSavedGame(saved)
+                                        navigateTo(ROUTE_PLAY)
+                                    }
                                 )
                             }
                         }
                     }
 
-                    NavHost(
-                        navController = navController,
-                        startDestination = ROUTE_HOME,
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        composable(ROUTE_HOME) {
-                            HomeScreen(
-                                prefs = prefs,
-                                ongoingGame = ongoingGame,
-                                onStartCustomMatch = { color, elo, personality, humanStyle, timeControl ->
-                                    viewModel.startCustomEngineMatch(
-                                        playerColor = color,
-                                        targetElo = elo,
-                                        personality = personality,
-                                        humanStyle = humanStyle,
-                                        timeControl = timeControl
-                                    )
-                                    navigateTo(ROUTE_PLAY)
-                                },
-                                onStartBotMatch = { bot, color, adaptive, timeControl ->
-                                    viewModel.startNewMatch(bot, color, adaptive, timeControl)
-                                    navigateTo(ROUTE_PLAY)
-                                },
-                                onStartLocalMatch = { timeControl ->
-                                    viewModel.startLocalTwoPlayerMatch(timeControl = timeControl)
-                                    navigateTo(ROUTE_PLAY)
-                                },
-                                onResumeGame = { saved ->
-                                    viewModel.resumeSavedGame(saved)
-                                    navigateTo(ROUTE_PLAY)
-                                },
-                                onActivateFloatingWindow = {
-                                    requestOrLaunchFloatingOverlay(
-                                        fen = ongoingGame?.currentFen ?: matchState.boardState.toFen(),
-                                        color = matchState.playerColor
-                                    )
-                                },
-                                onOpenImportDialog = { showImportDialog = true },
-                                onOpenDailyPuzzle = {
-                                    viewModel.loadDailyPuzzle()
-                                    navigateTo(ROUTE_PUZZLES)
-                                },
-                                onOpenStats = { navigateTo(ROUTE_STATS) },
-                                onOpenAboutLicenses = { showAboutDialog = true }
-                            )
-                        }
-
-                        composable(ROUTE_ARCHIVE) {
-                            ArchiveScreen(
-                                allGames = allGames,
-                                prefs = prefs,
-                                onOpenStats = { navigateTo(ROUTE_STATS) },
-                                onOpenGame = { saved ->
-                                    viewModel.resumeSavedGame(saved)
-                                    navigateTo(ROUTE_PLAY)
-                                },
-                                onDeleteGame = { id -> viewModel.discardOngoingGame(id) }
-                            )
-                        }
-
-                        composable(ROUTE_ANALYSIS) {
-                            AnalysisScreen(
-                                matchState = matchState,
-                                onOpenFenSetup = { showFenSetupSheet = true },
-                                onAnalyzeCurrentMatch = {
-                                    if (matchState.recordedMoves.isNotEmpty() && !matchState.isReviewingPastMove) {
-                                        viewModel.selectReviewMove(matchState.recordedMoves.lastIndex)
-                                    }
-                                    navigateTo(ROUTE_PLAY)
-                                },
-                                onAnalyzeMultiPvPosition = {
-                                    navigateTo(ROUTE_PLAY)
-                                    viewModel.analyzeDisplayedPositionMultiPv()
-                                },
-                                onOpenImportDialog = { showImportDialog = true },
-                                onOpenPuzzles = { navigateTo(ROUTE_PUZZLES) },
-                                onOpenSavedArchive = { navigateTo(ROUTE_ARCHIVE) }
-                            )
-                        }
-
-                        composable(ROUTE_SETTINGS) {
-                            SettingsScreen(
-                                prefs = prefs,
-                                stockfishStatus = stockfishStatus,
-                                syzygyTables = syzygyTables,
-                                syzygyStatusMessage = syzygyStatusMessage,
-                                onSelectThemeMode = { viewModel.setThemeMode(it) },
-                                onSelectBoardTheme = { viewModel.setBoardTheme(it) },
-                                onOpenBoardCustomization = { showBoardCustomizationSheet = true },
-                                onSelectStrengthTier = { viewModel.setStrengthTier(it) },
-                                onOpenEngineEloDialog = { showEngineEloDialog = true },
-                                onToggleHumanStyle = { viewModel.setHumanStyleEnabled(it) },
-                                onOpenPersonalitySheet = { showPersonalitySheet = true },
-                                onSelectEngineBackend = { viewModel.setEngineBackendPreference(it) },
-                                onSelectStockfishMoveTime = { viewModel.setStockfishMoveTimeMs(it) },
-                                onRefreshStockfish = { viewModel.refreshStockfishProbe() },
-                                onToggleEvalBar = { viewModel.setShowEvalBar(it) },
-                                onToggleFloatingAutoShow = { viewModel.setFloatingAutoShow(it) },
-                                onOpenFloatingNow = {
-                                    requestOrLaunchFloatingOverlay(
-                                        fen = matchState.boardState.toFen(),
-                                        color = matchState.playerColor
-                                    )
-                                },
-                                onOpenFloatingCustomization = { showFloatingCustomizationSheet = true },
-                                onToggleSound = { viewModel.setSoundEnabled(it) },
-                                onSelectSoundProfile = { viewModel.setSoundProfile(it) },
-                                onChangeSoundVolume = { viewModel.setSoundVolume(it) },
-                                onToggleHaptics = { viewModel.setHapticsEnabled(it) },
-                                onSelectVibrationStyle = { viewModel.setVibrationStyle(it) },
-                                onToggleAutoReview = { viewModel.setAutoReviewAfterGame(it) },
-                                onUpdateReminders = { enabled, hr, min ->
-                                    viewModel.updateReminderSettings(enabled, hr, min)
-                                },
-                                onTestNotification = { viewModel.sendTestNotification() },
-                                onImportSyzygyFiles = { uris -> viewModel.importSyzygyFiles(uris) },
-                                onDeleteSyzygyTable = { name -> viewModel.deleteSyzygyTable(name) },
-                                onClearSyzygyTables = { viewModel.clearSyzygyTables() },
-                                onOpenAboutLicenses = { showAboutDialog = true }
-                            )
-                        }
-
-                        composable(ROUTE_PLAY) {
-                            PlayScreen(
-                                matchState = matchState,
-                                prefs = prefs,
-                                onNavigateBack = { navController.popBackStack() },
-                                onSquareClick = { viewModel.onMatchSquareClick(it) },
-                                onSelectPromotion = { viewModel.selectPromotion(it) },
-                                onDismissPromotion = { viewModel.dismissPromotion() },
-                                onRequestHint = { viewModel.requestHint() },
-                                onUndo = { viewModel.undoLastTurn() },
-                                onFlipBoard = { viewModel.toggleBoardFlip() },
-                                onResign = { viewModel.resignMatch() },
-                                onClaimDraw = { viewModel.claimDraw() },
-                                onSelectReviewMove = { viewModel.selectReviewMove(it) },
-                                onOpenMoveLedger = { viewModel.openMoveLedgerSheet() },
-                                onDismissMoveLedger = { viewModel.dismissMoveLedgerSheet() },
-                                onOpenPostGameSheet = { viewModel.openPostGameSheet() },
-                                onDismissPostGameSheet = { viewModel.dismissPostGameSheet() },
-                                onStartOrResumeFullReview = { viewModel.startOrResumeFullReview() },
-                                onPauseFullReview = { viewModel.pauseFullReview() },
-                                onAnalyzeMultiPv = { viewModel.analyzeDisplayedPositionMultiPv() },
-                                onExportPgn = { exportMatchPgnFile() },
-                                onStartRematch = {
-                                    when (matchState.gameMode) {
-                                        GameMode.LOCAL_TWO_PLAYER -> viewModel.startLocalTwoPlayerMatch(
-                                            timeControl = matchState.timeControl,
-                                            startFen = matchState.customStartFen,
-                                            edited = matchState.editedPosition
-                                        )
-                                        GameMode.VS_ENGINE -> viewModel.startCustomEngineMatch(
-                                            playerColor = matchState.playerColor,
-                                            targetElo = matchState.customEngineElo,
-                                            personality = matchState.customPersonality,
-                                            humanStyle = matchState.humanStyle,
-                                            timeControl = matchState.timeControl,
-                                            startFen = matchState.customStartFen,
-                                            edited = matchState.editedPosition
-                                        )
-                                        GameMode.VS_BOT_PERSONA -> viewModel.startNewMatch(
-                                            bot = matchState.bot,
-                                            playerColor = matchState.playerColor,
-                                            adaptiveMode = prefs.adaptiveMode,
-                                            timeControl = matchState.timeControl
-                                        )
-                                    }
-                                },
-                                onToggleEvalBar = { viewModel.setShowEvalBar(it) },
-                                onOpenInFloatingWindow = { fen, color ->
-                                    requestOrLaunchFloatingOverlay(fen, color)
-                                },
-                                engineTelemetry = lastEngineTelemetry
-                            )
-                        }
-
-                        composable(ROUTE_PUZZLES) {
-                            PuzzlesScreen(
-                                puzzleState = puzzleState,
-                                prefs = prefs,
-                                solvedRecords = puzzleRecords,
-                                onSquareClick = { viewModel.onPuzzleSquareClick(it) },
-                                onShowHint = { viewModel.showPuzzleHint() },
-                                onResetPuzzle = { viewModel.loadPuzzle(puzzleState.puzzle, puzzleState.isDaily) },
-                                onSelectPuzzle = { puzzle, isDaily -> viewModel.loadPuzzle(puzzle, isDaily) }
-                            )
-                        }
-
-                        composable(ROUTE_STATS) {
-                            StatsScreen(
-                                prefs = prefs,
-                                selectedPeriod = selectedPeriod,
-                                periodicReport = periodicReport,
-                                ratingHistory = ratingHistory,
-                                completedGames = completedGames,
-                                achievements = achievements,
-                                unassistedOnly = unassistedStatsOnly,
-                                engineStatsSummary = engineStatsSummary,
-                                onSelectPeriod = { viewModel.selectReportPeriod(it) },
-                                onToggleUnassistedOnly = { viewModel.setUnassistedStatsOnly(it) },
-                                onReviewSavedGame = { saved ->
-                                    viewModel.resumeSavedGame(saved)
-                                    navigateTo(ROUTE_PLAY)
-                                }
-                            )
-                        }
+                    // Floating Pill Bottom Navigation Bar
+                    if (!useRail && !hideBottomNav) {
+                        FloatingBottomNavPill(
+                            currentRoute = currentRoute,
+                            onSelectRoute = { navigateTo(it) },
+                            modifier = Modifier.align(Alignment.BottomCenter)
+                        )
                     }
-                }
-
-                // Floating Pill Bottom Navigation Bar
-                if (!useRail && !hideBottomNav) {
-                    FloatingBottomNavPill(
-                        currentRoute = currentRoute,
-                        onSelectRoute = { navigateTo(it) },
-                        modifier = Modifier.align(Alignment.BottomCenter)
-                    )
                 }
             }
         }
@@ -588,8 +773,21 @@ private fun EliteChessRoot(
         ) {
             BoardCustomizationSheetContent(
                 prefs = prefs,
-                onSave = { style, material, selHex, lastHex, legalHex, showLast, showLegal, useRings ->
-                    viewModel.saveBoardAppearance(style, material, selHex, lastHex, legalHex, showLast, showLegal, useRings)
+                onSave = { style, material, selHex, lastHex, legalHex, showLast, showLegal, useRings, lastStyle, animStyle, showCoords, boardTheme ->
+                    viewModel.saveBoardAppearance(
+                        pieceStyle = style,
+                        boardMaterial = material,
+                        selectedColorHex = selHex,
+                        lastMoveColorHex = lastHex,
+                        legalMoveColorHex = legalHex,
+                        showLastMove = showLast,
+                        showLegalMoves = showLegal,
+                        useRings = useRings,
+                        lastMoveHighlightStyle = lastStyle,
+                        pieceAnimationStyle = animStyle,
+                        showCoordinates = showCoords,
+                        boardTheme = boardTheme
+                    )
                     showBoardCustomizationSheet = false
                 },
                 onDismiss = { showBoardCustomizationSheet = false }

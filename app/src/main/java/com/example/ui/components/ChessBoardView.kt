@@ -1,6 +1,11 @@
 package com.example.ui.components
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
@@ -31,16 +36,24 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.TextMeasurer
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
@@ -50,11 +63,17 @@ import com.example.chess.BoardTheme
 import com.example.chess.ChessBoardState
 import com.example.chess.ChessMove
 import com.example.chess.ChessPiece
+import com.example.chess.LastMoveHighlightStyle
+import com.example.chess.MoveQuality
+import com.example.chess.MultiPvLine
+import com.example.chess.PieceAnimationStyle
 import com.example.chess.PieceColor
 import com.example.chess.PieceStyle
 import com.example.chess.PieceType
 import com.example.chess.Square
+import com.example.chess.ThreatArrow
 import com.example.ui.theme.MonoFontFamily
+import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
@@ -77,6 +96,20 @@ fun ChessBoardView(
     selectedHighlightColor: Color? = null,
     lastMoveHighlightColor: Color? = null,
     legalMoveIndicatorColor: Color? = null,
+    lastMoveHighlightStyle: LastMoveHighlightStyle = LastMoveHighlightStyle.FILL,
+    colorLastMoveByQuality: Boolean = false,
+    lastMoveQuality: MoveQuality? = null,
+    showCoordinates: Boolean = true,
+    premoveSquares: Pair<Square, Square>? = null,
+    analysisLines: List<MultiPvLine> = emptyList(),
+    showEngineArrowsOnBoard: Boolean = true,
+    showMultiPvArrowNumbers: Boolean = true,
+    arrowStrengthColors: Boolean = true,
+    previousBestMoveArrow: ChessMove? = null,
+    threats: List<ThreatArrow> = emptyList(),
+    pieceAnimationStyle: PieceAnimationStyle = PieceAnimationStyle.DEFAULT,
+    enlargeOnDrag: Boolean = true,
+    boardScalePercent: Int = 100,
     onSquareClick: (Square) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -88,13 +121,31 @@ fun ChessBoardView(
     }
 
     val effectiveSelectedColor = selectedHighlightColor ?: boardTheme.selectedHighlight
-    val effectiveLastMoveColor = lastMoveHighlightColor ?: boardTheme.lastMoveHighlight
+    val baseLastMoveColor = if (colorLastMoveByQuality && lastMoveQuality != null) {
+        Color(lastMoveQuality.colorHex).copy(alpha = 0.42f)
+    } else {
+        lastMoveHighlightColor ?: boardTheme.lastMoveHighlight
+    }
     val effectiveLegalColor = legalMoveIndicatorColor ?: Color(0xCC0D9488)
+    val textMeasurer = rememberTextMeasurer()
+
+    val pulseTransition = rememberInfiniteTransition(label = "piecePulse")
+    val pulseScale by pulseTransition.animateFloat(
+        initialValue = 0.96f,
+        targetValue = 1.09f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(650),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "pulseVal"
+    )
+    val scaleFraction = (boardScalePercent.coerceIn(85, 100) / 100f)
 
     // Chessboard coordinates must always follow standard LTR algebraic orientation
     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
         Box(
             modifier = modifier
+                .fillMaxWidth(scaleFraction)
                 .aspectRatio(1f)
                 .clip(RoundedCornerShape(14.dp))
                 .background(boardTheme.boardBorder)
@@ -119,7 +170,13 @@ fun ChessBoardView(
                                 val isLight = (row + col) % 2 == 0
                                 val piece = boardState.pieceAt(sq)
                                 val isSelected = selectedSquare == sq
-                                val isLastMove = showLastMove && lastMove != null && (lastMove.from == sq || lastMove.to == sq)
+                                val isLastMove = showLastMove &&
+                                    lastMoveHighlightStyle != LastMoveHighlightStyle.NONE &&
+                                    lastMove != null &&
+                                    (lastMove.from == sq || lastMove.to == sq)
+                                val isLastMoveDest = showLastMove && lastMove != null && lastMove.to == sq
+                                val isPremoveSq = premoveSquares != null &&
+                                    (premoveSquares.first == sq || premoveSquares.second == sq)
                                 val isLegalTarget = showLegalMoves && (sq in legalTargets)
                                 val isCheckSquare = kingInCheckSquare == sq
 
@@ -129,11 +186,27 @@ fun ChessBoardView(
                                 val overlayColor by animateColorAsState(
                                     targetValue = when {
                                         isSelected -> effectiveSelectedColor
-                                        isLastMove -> effectiveLastMoveColor
+                                        isPremoveSq -> Color(0x88EC4899)
+                                        isLastMove && lastMoveHighlightStyle == LastMoveHighlightStyle.FILL -> baseLastMoveColor
                                         else -> Color.Transparent
                                     },
                                     animationSpec = tween(150),
                                     label = "squareHighlight"
+                                )
+
+                                val pieceScale by animateFloatAsState(
+                                    targetValue = when {
+                                        isSelected && pieceAnimationStyle == PieceAnimationStyle.PULSE -> pulseScale
+                                        isSelected && enlargeOnDrag -> 1.12f
+                                        else -> 1f
+                                    },
+                                    animationSpec = tween(140),
+                                    label = "pieceScale"
+                                )
+                                val pieceAlpha by animateFloatAsState(
+                                    targetValue = if (isSelected && pieceAnimationStyle == PieceAnimationStyle.FADE) 0.78f else 1f,
+                                    animationSpec = tween(140),
+                                    label = "pieceAlpha"
                                 )
 
                                 Box(
@@ -142,6 +215,19 @@ fun ChessBoardView(
                                         .fillMaxSize()
                                         .background(baseColor)
                                         .background(overlayColor)
+                                        .then(
+                                            if (isLastMove && lastMoveHighlightStyle == LastMoveHighlightStyle.BORDER && !isSelected) {
+                                                Modifier.border(
+                                                    width = 2.5.dp,
+                                                    color = baseLastMoveColor.copy(alpha = 0.92f)
+                                                )
+                                            } else Modifier
+                                        )
+                                        .then(
+                                            if (isSelected && pieceAnimationStyle == PieceAnimationStyle.TRAIL) {
+                                                Modifier.border(2.dp, Color(0xCC38BDF8))
+                                            } else Modifier
+                                        )
                                         .clickable(
                                             enabled = interactive,
                                             interactionSource = remember { MutableInteractionSource() },
@@ -179,7 +265,7 @@ fun ChessBoardView(
                                     }
 
                                     // Rank coordinate on leftmost visual column
-                                    if (visualCol == 0) {
+                                    if (showCoordinates && visualCol == 0) {
                                         Text(
                                             text = "${8 - row}",
                                             fontFamily = MonoFontFamily,
@@ -192,7 +278,7 @@ fun ChessBoardView(
                                         )
                                     }
                                     // File coordinate on bottommost visual row
-                                    if (visualRow == 7) {
+                                    if (showCoordinates && visualRow == 7) {
                                         Text(
                                             text = "${'a' + col}",
                                             fontFamily = MonoFontFamily,
@@ -213,6 +299,8 @@ fun ChessBoardView(
                                             modifier = Modifier
                                                 .fillMaxSize()
                                                 .padding(3.dp)
+                                                .scale(pieceScale)
+                                                .alpha(pieceAlpha)
                                         )
                                     }
 
@@ -248,14 +336,41 @@ fun ChessBoardView(
                                             )
                                         }
                                     }
+
+                                    // Move quality badge on target square (like ★ / !! / ??)
+                                    if (isLastMoveDest && lastMoveQuality != null && colorLastMoveByQuality) {
+                                        Box(
+                                            modifier = Modifier
+                                                .align(Alignment.TopEnd)
+                                                .padding(1.5.dp)
+                                                .size((squareSize * 0.34f).coerceAtLeast(13.dp))
+                                                .clip(CircleShape)
+                                                .background(Color(lastMoveQuality.colorHex))
+                                                .border(1.dp, Color.White, CircleShape),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text(
+                                                text = lastMoveQuality.badge,
+                                                fontSize = 8.sp,
+                                                fontWeight = FontWeight.Black,
+                                                color = Color.White,
+                                                lineHeight = 9.sp
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
                 }
 
-                // Coach Hint Arrow overlay
-                if (hintMove != null) {
+                // Board Arrow Layers: Previous Best Ghost, Threats, MultiPV Engine Lines, and Hint
+                val hasArrows = (showEngineArrowsOnBoard && analysisLines.isNotEmpty()) ||
+                    previousBestMoveArrow != null ||
+                    threats.isNotEmpty() ||
+                    hintMove != null
+
+                if (hasArrows) {
                     Canvas(modifier = Modifier.fillMaxSize()) {
                         val cellW = size.width / 8f
                         val cellH = size.height / 8f
@@ -264,49 +379,162 @@ fun ChessBoardView(
                             val vr = if (flipped) 7 - sq.row else sq.row
                             return Offset((vc + 0.5f) * cellW, (vr + 0.5f) * cellH)
                         }
-                        val start = centerOf(hintMove.from)
-                        val end = centerOf(hintMove.to)
-                        val angle = atan2((end.y - start.y).toDouble(), (end.x - start.x).toDouble())
-                        val arrowEnd = Offset(
-                            end.x - (cellW * 0.16f) * cos(angle).toFloat(),
-                            end.y - (cellH * 0.16f) * sin(angle).toFloat()
-                        )
-                        val hintColor = Color(0xDD22D3EE)
 
-                        drawLine(
-                            color = hintColor,
-                            start = start,
-                            end = arrowEnd,
-                            strokeWidth = cellW * 0.16f,
-                            cap = StrokeCap.Round
-                        )
-                        val headLen = cellW * 0.34f
-                        val headAngle = Math.toRadians(28.0)
-                        val p1 = Offset(
-                            end.x - headLen * cos(angle - headAngle).toFloat(),
-                            end.y - headLen * sin(angle - headAngle).toFloat()
-                        )
-                        val p2 = Offset(
-                            end.x - headLen * cos(angle + headAngle).toFloat(),
-                            end.y - headLen * sin(angle + headAngle).toFloat()
-                        )
-                        val headPath = Path().apply {
-                            moveTo(end.x, end.y)
-                            lineTo(p1.x, p1.y)
-                            lineTo(p2.x, p2.y)
-                            close()
+                        // 1. Previous best move ghost arrow
+                        if (previousBestMoveArrow != null) {
+                            drawChessArrow(
+                                start = centerOf(previousBestMoveArrow.from),
+                                end = centerOf(previousBestMoveArrow.to),
+                                cellW = cellW,
+                                cellH = cellH,
+                                color = Color(0x8894A3B8),
+                                strokeFactor = 0.12f,
+                                dashed = true
+                            )
                         }
-                        drawPath(headPath, hintColor)
-                        drawCircle(
-                            color = hintColor,
-                            radius = cellW * 0.14f,
-                            center = start,
-                            style = Stroke(width = cellW * 0.06f)
-                        )
+
+                        // 2. Threat arrows (red/orange danger indicators)
+                        threats.take(4).forEach { threat ->
+                            drawChessArrow(
+                                start = centerOf(threat.from),
+                                end = centerOf(threat.to),
+                                cellW = cellW,
+                                cellH = cellH,
+                                color = Color(0xCCEF4444),
+                                strokeFactor = 0.11f
+                            )
+                        }
+
+                        // 3. MultiPV Engine arrows (Rank 1..5, drawn weakest-first so rank 1 sits on top)
+                        if (showEngineArrowsOnBoard && analysisLines.isNotEmpty()) {
+                            val bestCp = analysisLines.first().evalWhiteCp
+                            val ordered = analysisLines.sortedByDescending { it.rank }
+                            ordered.forEach { line ->
+                                val arrowColor = if (arrowStrengthColors) {
+                                    val delta = abs(bestCp - line.evalWhiteCp)
+                                    when {
+                                        line.rank == 1 -> Color(0xDD22C55E) // Best emerald green
+                                        delta <= 35 -> Color(0xCC38BDF8)   // Strong sky blue
+                                        delta <= 95 -> Color(0xBBF59E0B)   // Decent amber
+                                        else -> Color(0x9994A3B8)          // Weaker muted slate
+                                    }
+                                } else {
+                                    when (line.rank) {
+                                        1 -> Color(0xDD22C55E)
+                                        2 -> Color(0xBB38BDF8)
+                                        else -> Color(0x8864748B)
+                                    }
+                                }
+                                val strokeScale = when (line.rank) {
+                                    1 -> 0.16f
+                                    2 -> 0.125f
+                                    else -> 0.095f
+                                }
+                                drawChessArrow(
+                                    start = centerOf(line.move.from),
+                                    end = centerOf(line.move.to),
+                                    cellW = cellW,
+                                    cellH = cellH,
+                                    color = arrowColor,
+                                    strokeFactor = strokeScale,
+                                    rankNumber = if (showMultiPvArrowNumbers) line.rank else null,
+                                    textMeasurer = textMeasurer
+                                )
+                            }
+                        }
+
+                        // 4. Coach Hint Arrow (highest priority cyan highlight)
+                        if (hintMove != null) {
+                            drawChessArrow(
+                                start = centerOf(hintMove.from),
+                                end = centerOf(hintMove.to),
+                                cellW = cellW,
+                                cellH = cellH,
+                                color = Color(0xEE22D3EE),
+                                strokeFactor = 0.16f,
+                                drawOriginRing = true
+                            )
+                        }
                     }
                 }
             }
         }
+    }
+}
+
+private fun DrawScope.drawChessArrow(
+    start: Offset,
+    end: Offset,
+    cellW: Float,
+    cellH: Float,
+    color: Color,
+    strokeFactor: Float = 0.15f,
+    dashed: Boolean = false,
+    drawOriginRing: Boolean = false,
+    rankNumber: Int? = null,
+    textMeasurer: TextMeasurer? = null
+) {
+    val angle = atan2((end.y - start.y).toDouble(), (end.x - start.x).toDouble())
+    val arrowEnd = Offset(
+        end.x - (cellW * 0.17f) * cos(angle).toFloat(),
+        end.y - (cellH * 0.17f) * sin(angle).toFloat()
+    )
+    drawLine(
+        color = color,
+        start = start,
+        end = arrowEnd,
+        strokeWidth = cellW * strokeFactor,
+        cap = StrokeCap.Round,
+        pathEffect = if (dashed) PathEffect.dashPathEffect(floatArrayOf(cellW * 0.16f, cellW * 0.12f), 0f) else null
+    )
+    val headLen = cellW * (strokeFactor * 2.15f).coerceAtLeast(0.26f)
+    val headAngle = Math.toRadians(28.0)
+    val p1 = Offset(
+        end.x - headLen * cos(angle - headAngle).toFloat(),
+        end.y - headLen * sin(angle - headAngle).toFloat()
+    )
+    val p2 = Offset(
+        end.x - headLen * cos(angle + headAngle).toFloat(),
+        end.y - headLen * sin(angle + headAngle).toFloat()
+    )
+    val headPath = Path().apply {
+        moveTo(end.x, end.y)
+        lineTo(p1.x, p1.y)
+        lineTo(p2.x, p2.y)
+        close()
+    }
+    drawPath(headPath, color)
+    if (drawOriginRing) {
+        drawCircle(
+            color = color,
+            radius = cellW * 0.14f,
+            center = start,
+            style = Stroke(width = cellW * 0.06f)
+        )
+    }
+    if (rankNumber != null && textMeasurer != null) {
+        val badgeCenter = Offset(
+            end.x - (cellW * 0.24f) * cos(angle).toFloat(),
+            end.y - (cellH * 0.24f) * sin(angle).toFloat()
+        )
+        val badgeR = cellW * 0.15f
+        drawCircle(color = Color(0xEE0F172A), radius = badgeR, center = badgeCenter)
+        drawCircle(color = color.copy(alpha = 1f), radius = badgeR, center = badgeCenter, style = Stroke(width = 1.6f))
+        val layout = textMeasurer.measure(
+            text = "$rankNumber",
+            style = TextStyle(
+                color = Color.White,
+                fontSize = (cellW * 0.20f / density).sp,
+                fontWeight = FontWeight.Bold
+            )
+        )
+        drawText(
+            textLayoutResult = layout,
+            topLeft = Offset(
+                badgeCenter.x - layout.size.width / 2f,
+                badgeCenter.y - layout.size.height / 2f
+            )
+        )
     }
 }
 

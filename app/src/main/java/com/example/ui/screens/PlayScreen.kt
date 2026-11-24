@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import android.content.Intent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
@@ -8,6 +9,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -21,7 +24,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.FormatListBulleted
 import androidx.compose.material.icons.automirrored.rounded.Undo
@@ -37,21 +42,27 @@ import androidx.compose.material.icons.rounded.FileDownload
 import androidx.compose.material.icons.rounded.Flag
 import androidx.compose.material.icons.rounded.Group
 import androidx.compose.material.icons.rounded.Lightbulb
+import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PictureInPictureAlt
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Psychology
 import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.SwapVert
 import androidx.compose.material.icons.rounded.Timer
 import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material.icons.rounded.Visibility
+import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material.icons.rounded.WarningAmber
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -78,6 +89,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
@@ -90,11 +102,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.chess.ChessCoachAnalyzer
 import com.example.chess.ChessPiece
+import com.example.chess.EvalBarPosition
 import com.example.chess.GameMode
 import com.example.chess.GameResult
 import com.example.chess.HintStage
 import com.example.chess.MoveQuality
 import com.example.chess.MultiPvLine
+import com.example.chess.PgnFenCodec
 import com.example.chess.PieceColor
 import com.example.chess.PieceStyle
 import com.example.chess.PieceType
@@ -109,7 +123,9 @@ import com.example.ui.components.ChessPieceGraphic
 import com.example.ui.components.CompactMoveHistoryStrip
 import com.example.ui.components.EvaluationBar
 import com.example.ui.components.EvaluationSwingChart
+import com.example.ui.components.HorizontalEvalBar
 import com.example.ui.components.MoveHistoryLedgerPanel
+import com.example.ui.components.MoveQualitySummaryBar
 import com.example.ui.components.PhaseGaugeRow
 import com.example.ui.components.PromotionPickerDialog
 import com.example.ui.theme.DangerRed
@@ -122,7 +138,7 @@ import com.example.ui.theme.formatArabicNumber
 import com.example.viewmodel.ActiveMatchUiState
 import java.util.Locale
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun PlayScreen(
     matchState: ActiveMatchUiState,
@@ -148,12 +164,33 @@ fun PlayScreen(
     onStartRematch: () -> Unit,
     onToggleEvalBar: (Boolean) -> Unit,
     onOpenInFloatingWindow: (String, PieceColor) -> Unit,
+    onForceReanalyze: () -> Unit = {},
+    onToggleReportVisibility: () -> Unit = {},
+    onPlayFromHere: () -> Unit = {},
+    onDismissPauseAlert: () -> Unit = {},
+    onUndoFromPauseAlert: () -> Unit = {},
+    onToggleShowThreats: (Boolean) -> Unit = {},
+    onSetPremove: (Boolean) -> Unit = {},
+    onSetUnassisted: (Boolean) -> Unit = {},
+    onSetBotResign: (Boolean) -> Unit = {},
+    onSetPauseBlunder: (Boolean) -> Unit = {},
+    onSetPauseMistake: (Boolean) -> Unit = {},
+    onSetShowMyStrength: (Boolean) -> Unit = {},
+    onSetShowOppStrength: (Boolean) -> Unit = {},
+    onSetEvalBarPosition: (EvalBarPosition) -> Unit = {},
     engineTelemetry: String = ""
 ) {
+    val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
     val clipboard = LocalClipboardManager.current
     var showOptionsSheet by remember { mutableStateOf(false) }
+    var showGameSettingsSheet by remember { mutableStateOf(false) }
+    var showAnalysisActionsSheet by remember { mutableStateOf(false) }
     var copiedMessage by remember { mutableStateOf<String?>(null) }
+
+    val hideAssistInOngoing = prefs.unassistedMode &&
+        matchState.gameResult == GameResult.ONGOING &&
+        matchState.gameMode != GameMode.LOCAL_TWO_PLAYER
 
     val displayedBoard = matchState.displayedBoardState
     val capturedPair = remember(displayedBoard) { displayedBoard.capturedPiecesFromStart() }
@@ -232,22 +269,36 @@ fun PlayScreen(
 
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    horizontalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
-                    if (lastSan != null) {
-                        Surface(
-                            shape = RoundedCornerShape(10.dp),
-                            color = MaterialTheme.colorScheme.surface,
-                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+                    if (!hideAssistInOngoing) {
+                        IconButton(
+                            onClick = { onToggleShowThreats(!prefs.showThreats) },
+                            modifier = Modifier
+                                .size(48.dp)
+                                .testTag("toggle_threats_btn")
                         ) {
-                            Text(
-                                text = lastSan,
-                                fontFamily = MonoFontFamily,
-                                fontWeight = FontWeight.Bold,
-                                style = MaterialTheme.typography.labelMedium,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            Icon(
+                                imageVector = if (prefs.showThreats) Icons.Rounded.Visibility else Icons.Rounded.VisibilityOff,
+                                contentDescription = if (prefs.showThreats) "إخفاء التهديدات" else "إظهار التهديدات",
+                                tint = if (prefs.showThreats) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(20.dp)
                             )
                         }
+                    }
+
+                    IconButton(
+                        onClick = { showGameSettingsSheet = true },
+                        modifier = Modifier
+                            .size(48.dp)
+                            .testTag("game_settings_quick_btn")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Settings,
+                            contentDescription = "إعدادات اللعب",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(20.dp)
+                        )
                     }
 
                     Surface(
@@ -269,13 +320,13 @@ fun PlayScreen(
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.Bold,
                             color = if (isPlayerTurn) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                         )
                     }
                 }
             }
 
-            if (engineTelemetry.isNotBlank()) {
+            if (engineTelemetry.isNotBlank() && !hideAssistInOngoing) {
                 Text(
                     text = formatArabicDigits(engineTelemetry),
                     style = MaterialTheme.typography.labelSmall,
@@ -297,6 +348,9 @@ fun PlayScreen(
                     openingNameAr = matchState.openingNameAr,
                     activeReviewIndex = matchState.reviewIndex,
                     playerColor = matchState.playerColor,
+                    figurineNotation = prefs.figurineNotation,
+                    showMyMoveStrength = prefs.showMyMoveStrength && !hideAssistInOngoing,
+                    showOpponentMoveStrength = prefs.showOpponentMoveStrength && !hideAssistInOngoing,
                     onSelectMove = onSelectReviewMove,
                     onOpenFullLedger = onOpenMoveLedger
                 )
@@ -317,12 +371,38 @@ fun PlayScreen(
                 isActiveTurn = matchState.gameResult == GameResult.ONGOING && matchState.boardState.turn == topColor,
                 timeControl = matchState.timeControl,
                 remainingSeconds = topTimeSec,
-                capturedPieces = if (topColor == PieceColor.WHITE) capturedPair.first else capturedPair.second,
-                advantage = if (topColor == PieceColor.WHITE) materialDiff else -materialDiff,
+                capturedPieces = if (prefs.showCapturedPieces) {
+                    if (topColor == PieceColor.WHITE) capturedPair.first else capturedPair.second
+                } else emptyList(),
+                advantage = if (prefs.showCapturedPieces) {
+                    if (topColor == PieceColor.WHITE) materialDiff else -materialDiff
+                } else 0,
                 pieceStyle = prefs.pieceStyle
             )
 
             // 4) Main Chess Board + Optional Eval Bar
+            val displayedEval = if (matchState.reviewIndex != null && matchState.reviewIndex in matchState.recordedMoves.indices) {
+                matchState.recordedMoves[matchState.reviewIndex].evalWhiteCp
+            } else {
+                matchState.evalWhiteCp
+            }
+            val evalDepth = matchState.multiPvLines.firstOrNull()?.depth ?: 0
+            val showLeftEvalBar = !hideAssistInOngoing && prefs.showEvalBar && when (prefs.evalBarPosition) {
+                EvalBarPosition.LEFT_OF_BOARD -> true
+                EvalBarPosition.LEFT_IN_REPORT -> matchState.gameResult != GameResult.ONGOING || matchState.isReviewingPastMove
+                EvalBarPosition.SMART -> matchState.gameResult != GameResult.ONGOING
+                EvalBarPosition.BELOW_BOARD -> false
+            }
+            val showBelowEvalBar = !hideAssistInOngoing && prefs.showEvalBar && !showLeftEvalBar &&
+                (prefs.evalBarPosition == EvalBarPosition.BELOW_BOARD || prefs.evalBarPosition == EvalBarPosition.SMART)
+
+            val displayedLastMoveQuality = if (hideAssistInOngoing) null
+            else if (matchState.reviewIndex != null && matchState.reviewIndex in matchState.recordedMoves.indices) {
+                matchState.recordedMoves[matchState.reviewIndex].quality
+            } else {
+                matchState.recordedMoves.lastOrNull()?.quality
+            }
+
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -330,12 +410,7 @@ fun PlayScreen(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                if (prefs.showEvalBar) {
-                    val displayedEval = if (matchState.reviewIndex != null && matchState.reviewIndex in matchState.recordedMoves.indices) {
-                        matchState.recordedMoves[matchState.reviewIndex].evalWhiteCp
-                    } else {
-                        matchState.evalWhiteCp
-                    }
+                if (showLeftEvalBar) {
                     EvaluationBar(
                         evalWhiteCp = displayedEval,
                         flipped = matchState.flippedBoard,
@@ -352,9 +427,10 @@ fun PlayScreen(
                     selectedSquare = matchState.selectedSquare,
                     legalMovesForSelected = matchState.legalMovesForSelected,
                     lastMove = matchState.displayedLastMove,
-                    hintMove = if (matchState.currentHintStage == HintStage.EXACT) matchState.currentHint?.move else null,
+                    hintMove = if (!hideAssistInOngoing && matchState.currentHintStage == HintStage.EXACT) matchState.currentHint?.move else null,
                     flipped = matchState.flippedBoard,
-                    interactive = matchState.gameResult == GameResult.ONGOING && !matchState.isBotThinking,
+                    interactive = matchState.gameResult == GameResult.ONGOING &&
+                        (!matchState.isBotThinking || prefs.premoveEnabled),
                     boardMaterial = prefs.boardMaterial,
                     showLastMove = prefs.showLastMove,
                     showLegalMoves = prefs.showLegalMoves,
@@ -362,11 +438,35 @@ fun PlayScreen(
                     selectedHighlightColor = Color(prefs.selectedColorHex),
                     lastMoveHighlightColor = Color(prefs.lastMoveColorHex),
                     legalMoveIndicatorColor = Color(prefs.legalMoveColorHex),
+                    lastMoveHighlightStyle = prefs.lastMoveHighlightStyle,
+                    colorLastMoveByQuality = prefs.colorLastMoveByQuality && !hideAssistInOngoing,
+                    lastMoveQuality = displayedLastMoveQuality,
+                    showCoordinates = prefs.showCoordinates,
+                    premoveSquares = if (prefs.premoveEnabled) matchState.pendingPremove else null,
+                    analysisLines = if (hideAssistInOngoing) emptyList() else matchState.multiPvLines,
+                    showEngineArrowsOnBoard = prefs.showEngineArrowsOnBoard && !hideAssistInOngoing,
+                    showMultiPvArrowNumbers = prefs.showMultiPvArrowNumbers,
+                    arrowStrengthColors = prefs.arrowStrengthColors,
+                    previousBestMoveArrow = if (prefs.showPreviousBestGhostArrow && !hideAssistInOngoing) {
+                        matchState.previousBestMoveForReview
+                    } else null,
+                    threats = if (prefs.showThreats && !hideAssistInOngoing) matchState.threatArrows else emptyList(),
+                    pieceAnimationStyle = prefs.pieceAnimationStyle,
+                    enlargeOnDrag = prefs.enlargeOnDrag,
+                    boardScalePercent = prefs.boardScalePercent,
                     onSquareClick = { sq ->
                         if (prefs.hapticsEnabled) haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                         onSquareClick(sq)
                     },
                     modifier = Modifier.weight(1f)
+                )
+            }
+
+            if (showBelowEvalBar) {
+                HorizontalEvalBar(
+                    evalWhiteCp = displayedEval,
+                    depth = evalDepth,
+                    flipped = matchState.flippedBoard
                 )
             }
 
@@ -385,10 +485,71 @@ fun PlayScreen(
                 isActiveTurn = matchState.gameResult == GameResult.ONGOING && matchState.boardState.turn == bottomColor,
                 timeControl = matchState.timeControl,
                 remainingSeconds = bottomTimeSec,
-                capturedPieces = if (bottomColor == PieceColor.WHITE) capturedPair.first else capturedPair.second,
-                advantage = if (bottomColor == PieceColor.WHITE) materialDiff else -materialDiff,
+                capturedPieces = if (prefs.showCapturedPieces) {
+                    if (bottomColor == PieceColor.WHITE) capturedPair.first else capturedPair.second
+                } else emptyList(),
+                advantage = if (prefs.showCapturedPieces) {
+                    if (bottomColor == PieceColor.WHITE) materialDiff else -materialDiff
+                } else 0,
                 pieceStyle = prefs.pieceStyle
             )
+
+            // 5a) Pause on Blunder / Mistake Alert Banner
+            AnimatedVisibility(visible = matchState.pauseAlertMove != null && matchState.gameResult == GameResult.ONGOING) {
+                val pm = matchState.pauseAlertMove
+                if (pm != null) {
+                    val qColor = Color(pm.quality.colorHex)
+                    val displaySan = if (prefs.figurineNotation) ChessCoachAnalyzer.toFigurineSan(pm.san) else pm.san
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = qColor.copy(alpha = 0.16f),
+                        border = BorderStroke(1.5.dp, qColor)
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(Icons.Rounded.WarningAmber, contentDescription = null, tint = qColor, modifier = Modifier.size(18.dp))
+                                Text(
+                                    text = "تنبيه ${pm.quality.labelAr}: $displaySan — هل تريد التراجع؟",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Button(
+                                    onClick = onUndoFromPauseAlert,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .heightIn(min = 48.dp)
+                                        .testTag("pause_alert_undo_btn")
+                                ) {
+                                    Text("تراجع عن النقلة", fontWeight = FontWeight.Bold)
+                                }
+                                OutlinedButton(
+                                    onClick = onDismissPauseAlert,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .heightIn(min = 48.dp)
+                                        .testTag("pause_alert_continue_btn")
+                                ) {
+                                    Text("متابعة اللعب", fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
 
             // 5b) Claimable Draw Banner (50-move or Threefold Repetition)
             AnimatedVisibility(visible = matchState.gameResult == GameResult.ONGOING && matchState.claimableDrawReason != null) {
@@ -429,12 +590,14 @@ fun PlayScreen(
                 }
             }
 
-            // 6) Hint / Move Evaluation / MultiPV-3 / Full Review Banner
+            // 6) Hint / Move Evaluation / MultiPV / Full Review Banner
             val activeMoveNote: Pair<MoveQuality, String>? = when {
+                hideAssistInOngoing -> null
                 matchState.reviewIndex != null && matchState.reviewIndex in matchState.recordedMoves.indices -> {
                     val rm = matchState.recordedMoves[matchState.reviewIndex]
                     val grade = ChessCoachAnalyzer.gradeLabelFromLoss(rm.centipawnLoss)
-                    rm.quality to "${rm.san} ($grade • ${formatArabicNumber(rm.centipawnLoss)} cp): ${rm.coachNoteAr}"
+                    val shownSan = if (prefs.figurineNotation) ChessCoachAnalyzer.toFigurineSan(rm.san) else rm.san
+                    rm.quality to "$shownSan ($grade • ${formatArabicNumber(rm.centipawnLoss)} cp): ${rm.coachNoteAr}"
                 }
                 matchState.currentHint != null -> {
                     val stage = matchState.currentHintStage ?: HintStage.CONCEPT
@@ -586,12 +749,27 @@ fun PlayScreen(
                 }
             }
 
-            // 6c) Interactive MultiPV-3 Card (best 3 engine lines for displayed position)
-            AnimatedVisibility(visible = matchState.isAnalyzingMultiPv || matchState.multiPvLines.isNotEmpty()) {
+            // 6c) Interactive MultiPV Card (best 1..5 engine lines for displayed position)
+            AnimatedVisibility(visible = !hideAssistInOngoing && (matchState.isAnalyzingMultiPv || matchState.multiPvLines.isNotEmpty())) {
                 MultiPvLinesCard(
                     lines = matchState.multiPvLines,
+                    maxLines = prefs.analysisMultiPvCount.coerceIn(1, 5),
+                    figurineNotation = prefs.figurineNotation,
                     isLoading = matchState.isAnalyzingMultiPv,
                     onRefresh = onAnalyzeMultiPv
+                )
+            }
+
+            // 6d) Chessis Pro Bottom Move Quality Summary Bar
+            AnimatedVisibility(
+                visible = matchState.showPostGameReportBar &&
+                    matchState.recordedMoves.isNotEmpty() &&
+                    (matchState.gameResult != GameResult.ONGOING || matchState.isReviewingPastMove)
+            ) {
+                MoveQualitySummaryBar(
+                    moves = matchState.recordedMoves,
+                    playerColor = matchState.playerColor,
+                    includeOpponent = prefs.showOpponentMoveStrength
                 )
             }
 
@@ -649,7 +827,7 @@ fun PlayScreen(
                     Button(
                         onClick = onOpenPostGameSheet,
                         modifier = Modifier
-                            .weight(1.2f)
+                            .weight(1.15f)
                             .heightIn(min = 48.dp)
                             .testTag("view_report_button"),
                         shape = RoundedCornerShape(14.dp),
@@ -670,25 +848,25 @@ fun PlayScreen(
                     ) {
                         Icon(Icons.Rounded.Psychology, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(4.dp))
-                        Text("٣ خطوط", maxLines = 1)
+                        Text("خطوط", maxLines = 1)
                     }
                     OutlinedButton(
-                        onClick = onExportPgn,
+                        onClick = { showAnalysisActionsSheet = true },
                         modifier = Modifier
-                            .weight(0.85f)
+                            .weight(0.95f)
                             .heightIn(min = 48.dp)
-                            .testTag("post_export_pgn_button"),
+                            .testTag("post_analysis_actions_button"),
                         shape = RoundedCornerShape(14.dp),
                         contentPadding = PaddingValues(horizontal = 6.dp)
                     ) {
-                        Icon(Icons.Rounded.FileDownload, contentDescription = "تصدير PGN", modifier = Modifier.size(16.dp))
+                        Icon(Icons.Rounded.MoreVert, contentDescription = "إجراءات التحليل", modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(3.dp))
-                        Text("PGN", maxLines = 1)
+                        Text("إجراءات", maxLines = 1)
                     }
                     OutlinedButton(
                         onClick = onStartRematch,
                         modifier = Modifier
-                            .weight(0.95f)
+                            .weight(0.9f)
                             .heightIn(min = 48.dp)
                             .testTag("rematch_button"),
                         shape = RoundedCornerShape(14.dp),
@@ -849,6 +1027,157 @@ fun PlayScreen(
             }
         }
 
+        // In-Game Quick Settings Modal Sheet (Chessis Pro parity)
+        if (showGameSettingsSheet) {
+            val gsSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+            ModalBottomSheet(
+                onDismissRequest = { showGameSettingsSheet = false },
+                sheetState = gsSheetState
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 18.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        text = "إعدادات اللعب السريعة",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                    PlaySwitchItem("الحركة المسبقة (Pre-move)", "إعداد نقلة مسبقة أثناء تفكير الخصم", prefs.premoveEnabled, "gs_premove_switch", onSetPremove)
+                    PlaySwitchItem("وضع بدون مساعدة", "تعطيل التقييم والأسهم والتلميحات أثناء المباراة", prefs.unassistedMode, "gs_unassisted_switch", onSetUnassisted)
+                    PlaySwitchItem("إظهار التهديدات", "عرض أسهم القطع المهدَّدة على الرقعة", prefs.showThreats, "gs_threats_switch", onToggleShowThreats)
+                    PlaySwitchItem("شريط التقييم الحي", "عرض عمود أو شريط أفضلية التقييم", prefs.showEvalBar, "gs_evalbar_switch", onToggleEvalBar)
+                    Text(
+                        text = "موضع شريط التقييم",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        EvalBarPosition.entries.forEach { pos ->
+                            FilterChip(
+                                selected = prefs.evalBarPosition == pos,
+                                onClick = { onSetEvalBarPosition(pos) },
+                                label = { Text(pos.nameAr) }
+                            )
+                        }
+                    }
+                    PlaySwitchItem("استسلام البوت تلقائياً", "انسحاب البوت عند التأخر بأفضلية ساحقة ٣ نقلات", prefs.botResignEnabled, "gs_bot_resign_switch", onSetBotResign)
+                    PlaySwitchItem("تنبيه عند الخطأ الفادح (??)", "إيقاف مؤقت مع خيار التراجع عند الخطأ الكبير", prefs.pauseOnBlunder, "gs_pause_blunder_switch", onSetPauseBlunder)
+                    PlaySwitchItem("تنبيه عند الخطأ (?)", "إيقاف مؤقت مع خيار التراجع عند الخطأ المتوسط", prefs.pauseOnMistake, "gs_pause_mistake_switch", onSetPauseMistake)
+                    PlaySwitchItem("عرض قوة نقلاتي", "تقييم نقلاتك بالشارات والألوان في السجل", prefs.showMyMoveStrength, "gs_my_strength_switch", onSetShowMyStrength)
+                    PlaySwitchItem("عرض قوة نقلات الخصم", "تقييم نقلات الخصم في السجل والتقرير", prefs.showOpponentMoveStrength, "gs_opp_strength_switch", onSetShowOppStrength)
+                    Spacer(Modifier.height(16.dp))
+                }
+            }
+        }
+
+        // Analysis & Share Quick Actions Sheet (Chessis Pro 3d3a2267 parity)
+        if (showAnalysisActionsSheet) {
+            val aaSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+            ModalBottomSheet(
+                onDismissRequest = { showAnalysisActionsSheet = false },
+                sheetState = aaSheetState
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 18.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "إجراءات التحليل والمشاركة",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                    OptionSheetActionRow(
+                        title = "العب من هنا",
+                        subtitle = "استكمال اللعب ضد المحرك انطلاقاً من الوضعية المعروضة",
+                        icon = Icons.Rounded.PlayArrow,
+                        enabled = true,
+                        tag = "play_from_here_btn",
+                        onClick = {
+                            showAnalysisActionsSheet = false
+                            onPlayFromHere()
+                        }
+                    )
+                    OptionSheetActionRow(
+                        title = "حلّل مرة أخرى",
+                        subtitle = "إعادة فحص جميع نقلات المباراة بدقة كاملة",
+                        icon = Icons.Rounded.Refresh,
+                        enabled = matchState.recordedMoves.isNotEmpty(),
+                        tag = "reanalyze_game_btn",
+                        onClick = {
+                            showAnalysisActionsSheet = false
+                            onForceReanalyze()
+                        }
+                    )
+                    OptionSheetActionRow(
+                        title = if (matchState.showPostGameReportBar) "إخفاء تقرير المباراة" else "إظهار تقرير المباراة",
+                        subtitle = "تبديل إظهار شريط ملخص جودة النقلات أسفل الرقعة",
+                        icon = Icons.Rounded.Analytics,
+                        enabled = true,
+                        tag = "toggle_report_bar_btn",
+                        onClick = {
+                            showAnalysisActionsSheet = false
+                            onToggleReportVisibility()
+                        }
+                    )
+                    OptionSheetActionRow(
+                        title = "مشاركة PGN",
+                        subtitle = "مشاركة نص المباراة أو تصديره إلى ملف .pgn",
+                        icon = Icons.Rounded.Share,
+                        enabled = true,
+                        tag = "share_pgn_btn",
+                        onClick = {
+                            showAnalysisActionsSheet = false
+                            val pgnText = PgnFenCodec.exportPgn(matchState.recordedMoves)
+                            val sendIntent = Intent(Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(Intent.EXTRA_TEXT, pgnText)
+                            }
+                            context.startActivity(Intent.createChooser(sendIntent, "مشاركة PGN"))
+                        }
+                    )
+                    OptionSheetActionRow(
+                        title = "حفظ ملف PGN (Ruqaa.pgn)",
+                        subtitle = "حفظ المباراة عبر منتقي الملفات المحلي",
+                        icon = Icons.Rounded.FileDownload,
+                        enabled = true,
+                        tag = "post_export_pgn_button",
+                        onClick = {
+                            showAnalysisActionsSheet = false
+                            onExportPgn()
+                        }
+                    )
+                    OptionSheetActionRow(
+                        title = "مشاركة FEN الحالي",
+                        subtitle = "مشاركة رمز الوضعية الحالية أو نسخه للحافظة",
+                        icon = Icons.Rounded.ContentCopy,
+                        enabled = true,
+                        tag = "share_fen_btn",
+                        onClick = {
+                            showAnalysisActionsSheet = false
+                            val fen = matchState.displayedBoardState.toFen()
+                            clipboard.setText(AnnotatedString(fen))
+                            val sendIntent = Intent(Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(Intent.EXTRA_TEXT, fen)
+                            }
+                            context.startActivity(Intent.createChooser(sendIntent, "مشاركة FEN الحالي"))
+                        }
+                    )
+                    Spacer(Modifier.height(16.dp))
+                }
+            }
+        }
+
         // Full Algebraic Move Ledger Bottom Sheet
         if (matchState.showMoveLedgerSheet) {
             val ledgerSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -861,6 +1190,7 @@ fun PlayScreen(
                     openingNameAr = matchState.openingNameAr,
                     activeReviewIndex = matchState.reviewIndex,
                     playerColor = matchState.playerColor,
+                    figurineNotation = prefs.figurineNotation,
                     onSelectMove = { idx -> onSelectReviewMove(idx) }
                 )
             }
@@ -884,6 +1214,7 @@ fun PlayScreen(
                     moves = matchState.recordedMoves,
                     report = matchState.postGameReport,
                     unlockedAchievements = matchState.newlyUnlockedAchievements,
+                    showAverageCpl = prefs.showAverageCplInReport,
                     onReviewMoves = {
                         onDismissPostGameSheet()
                         if (matchState.recordedMoves.isNotEmpty()) {
@@ -905,8 +1236,35 @@ fun PlayScreen(
 }
 
 @Composable
+private fun PlaySwitchItem(
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    tag: String,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+            Text(title, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Switch(checked = checked, onCheckedChange = onCheckedChange, modifier = Modifier.testTag(tag))
+    }
+}
+
+@Composable
 private fun MultiPvLinesCard(
     lines: List<MultiPvLine>,
+    maxLines: Int,
+    figurineNotation: Boolean,
     isLoading: Boolean,
     onRefresh: () -> Unit
 ) {
@@ -926,7 +1284,7 @@ private fun MultiPvLinesCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "أفضل ٣ خطوط للوضعية",
+                    text = "أفضل ${formatArabicNumber(maxLines)} خطوط للوضعية",
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.primary
@@ -942,7 +1300,7 @@ private fun MultiPvLinesCard(
             if (isLoading) {
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
             } else {
-                lines.take(3).forEach { line ->
+                lines.take(maxLines).forEach { line ->
                     val evalLabel = if (line.mateIn != null) {
                         val m = line.mateIn
                         if (m > 0) "+M${formatArabicNumber(m)}" else "-M${formatArabicNumber(-m)}"
@@ -974,8 +1332,14 @@ private fun MultiPvLinesCard(
                             )
                         }
                         CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                            val rawMoves = if (line.pvSan.isNotEmpty()) line.pvSan.take(4) else listOf(line.san)
+                            val shownMoves = if (figurineNotation) {
+                                rawMoves.joinToString(" ") { ChessCoachAnalyzer.toFigurineSan(it) }
+                            } else {
+                                rawMoves.joinToString(" ")
+                            }
                             Text(
-                                text = if (line.pvSan.isNotEmpty()) line.pvSan.take(4).joinToString(" ") else line.san,
+                                text = shownMoves,
                                 fontFamily = MonoFontFamily,
                                 style = MaterialTheme.typography.bodySmall,
                                 fontWeight = FontWeight.SemiBold,
@@ -1242,6 +1606,7 @@ private fun PostGameAnalysisContent(
     moves: List<RecordedMove>,
     report: PostGameReport,
     unlockedAchievements: List<AchievementDef>,
+    showAverageCpl: Boolean = true,
     onReviewMoves: () -> Unit,
     onExportPgn: () -> Unit,
     onPlayAgain: () -> Unit
@@ -1276,7 +1641,9 @@ private fun PostGameAnalysisContent(
             ) {
                 MetricBox("دقتك", "${formatArabicNumber(report.playerAccuracy)}٪", MaterialTheme.colorScheme.primary, Modifier.weight(1f))
                 MetricBox("دقة $opponentLabel", "${formatArabicNumber(report.opponentAccuracy)}٪", opponentColor, Modifier.weight(1f))
-                MetricBox("فقدان", "${formatArabicNumber(report.acpl)} cp", MaterialTheme.colorScheme.tertiary, Modifier.weight(1f))
+                if (showAverageCpl) {
+                    MetricBox("فقدانك / خصمك", "${formatArabicNumber(report.acpl)} / ${formatArabicNumber(report.opponentAcpl)}", MaterialTheme.colorScheme.tertiary, Modifier.weight(1.1f))
+                }
                 MetricBox(
                     "ELO",
                     if (report.eloDelta >= 0) "+${formatArabicNumber(report.eloDelta)}" else formatArabicNumber(report.eloDelta),

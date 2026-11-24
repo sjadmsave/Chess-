@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -20,22 +21,27 @@ import androidx.compose.material.icons.rounded.Balance
 import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.Casino
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Clear
 import androidx.compose.material.icons.rounded.CrisisAlert
 import androidx.compose.material.icons.rounded.Extension
 import androidx.compose.material.icons.rounded.Flag
 import androidx.compose.material.icons.rounded.HourglassTop
 import androidx.compose.material.icons.rounded.Hub
 import androidx.compose.material.icons.rounded.LocalFireDepartment
+import androidx.compose.material.icons.rounded.Psychology
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Shield
+import androidx.compose.material.icons.rounded.SportsMma
 import androidx.compose.material.icons.rounded.Timeline
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -54,6 +60,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.chess.EnginePersonality
+import com.example.chess.PersonalityCategory
 import com.example.chess.PersonalityRisk
 import com.example.chess.StrengthTier
 import com.example.ui.theme.formatArabicNumber
@@ -70,6 +77,20 @@ fun EnginePersonalitySheetContent(
     onDismiss: () -> Unit
 ) {
     var localIntensity by remember(intensity) { mutableIntStateOf(intensity) }
+    var searchQuery by remember { mutableStateOf("") }
+    var selectedCategory by remember { mutableStateOf(PersonalityCategory.ALL) }
+
+    val filteredPersonalities = remember(searchQuery, selectedCategory) {
+        val q = searchQuery.trim()
+        EnginePersonality.entries.filter { p ->
+            val catOk = selectedCategory == PersonalityCategory.ALL || p.category == selectedCategory
+            val qOk = q.isBlank() ||
+                p.nameAr.contains(q, ignoreCase = true) ||
+                p.styleBadgeAr.contains(q, ignoreCase = true) ||
+                p.descriptionAr.contains(q, ignoreCase = true)
+            catOk && qOk
+        }
+    }
 
     LazyColumn(
         modifier = Modifier
@@ -86,12 +107,12 @@ fun EnginePersonalitySheetContent(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "شخصية المحرك",
+                        text = "شخصيات المحرك (${formatArabicNumber(EnginePersonality.entries.size)})",
                         style = MaterialTheme.typography.headlineSmall,
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = "١٢ شخصية تكتيكية + الكلاسيكي الافتراضي",
+                        text = "٥٠ شخصية متنوعة هجومية ودفاعية وتكتيكية وأسطورية",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -186,7 +207,42 @@ fun EnginePersonalitySheetContent(
             }
         }
 
-        items(EnginePersonality.entries) { p ->
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    placeholder = { Text("ابحث عن شخصية أو أسلوب...") },
+                    leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
+                    trailingIcon = {
+                        if (searchQuery.isNotEmpty()) {
+                            IconButton(onClick = { searchQuery = "" }) {
+                                Icon(Icons.Rounded.Clear, contentDescription = "مسح")
+                            }
+                        }
+                    },
+                    singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    items(PersonalityCategory.entries) { cat ->
+                        val count = if (cat == PersonalityCategory.ALL) {
+                            EnginePersonality.entries.size
+                        } else {
+                            EnginePersonality.entries.count { it.category == cat }
+                        }
+                        FilterChip(
+                            selected = selectedCategory == cat,
+                            onClick = { selectedCategory = cat },
+                            label = { Text("${cat.nameAr} (${formatArabicNumber(count)})") }
+                        )
+                    }
+                }
+            }
+        }
+
+        items(filteredPersonalities, key = { it.id }) { p ->
             val selected = p == selectedPersonality
             Surface(
                 onClick = { onSelectPersonality(p) },
@@ -467,4 +523,14 @@ private fun personalityIcon(p: EnginePersonality): ImageVector = when (p) {
     EnginePersonality.OPPORTUNITY_HUNTER -> Icons.Rounded.CrisisAlert
     EnginePersonality.LONG_GAME_MAKER -> Icons.Rounded.HourglassTop
     EnginePersonality.MYSTERY_PLAYER -> Icons.Rounded.Casino
+    else -> when (p.category) {
+        PersonalityCategory.ALL,
+        PersonalityCategory.BASELINE -> Icons.Rounded.Balance
+        PersonalityCategory.ATTACKING -> Icons.Rounded.LocalFireDepartment
+        PersonalityCategory.DEFENSIVE -> Icons.Rounded.Shield
+        PersonalityCategory.POSITIONAL -> Icons.Rounded.Hub
+        PersonalityCategory.TACTICAL -> Icons.Rounded.CrisisAlert
+        PersonalityCategory.ENDGAME -> Icons.Rounded.Flag
+        PersonalityCategory.PSYCHOLOGICAL -> Icons.Rounded.Psychology
+    }
 }

@@ -17,6 +17,7 @@ import com.example.chess.PieceStyle
 import com.example.chess.PuzzleCategory
 import com.example.chess.PuzzleRepository
 import com.example.chess.RecordedMove
+import com.example.chess.SoundProfile
 import com.example.chess.StockfishUciEngine
 import com.example.chess.StrengthTier
 import com.example.chess.SyzygyManager
@@ -35,8 +36,15 @@ class ChessEngineAndPuzzlesTest {
 
     @Test
     fun verifyAllPuzzleSolutionsAreLegalAndMatesDeliverCheckmate() {
+        assertTrue("Expected at least 295 puzzles, found ${PuzzleRepository.puzzles.size}", PuzzleRepository.puzzles.size >= 295)
+        val ids = PuzzleRepository.puzzles.map { it.id }
+        assertEquals("Duplicate puzzle IDs detected", ids.size, ids.toSet().size)
+        val fens = PuzzleRepository.puzzles.map { it.fen.trim() }
+        assertEquals("Duplicate puzzle FENs detected", fens.size, fens.toSet().size)
+
         for (puzzle in PuzzleRepository.puzzles) {
-            var state = ChessBoardState.fromFen(puzzle.fen)
+            val initialState = ChessBoardState.fromFen(puzzle.fen)
+            var state = initialState
             assertTrue("Puzzle ${puzzle.id} has empty solution", puzzle.solutionUci.isNotEmpty())
             for (uci in puzzle.solutionUci) {
                 val legal = state.generateLegalMoves()
@@ -45,10 +53,15 @@ class ChessEngineAndPuzzlesTest {
                 state = state.copyWithMove(move!!)
             }
             if (puzzle.category == PuzzleCategory.MATE_IN_1 || puzzle.category == PuzzleCategory.MATE_IN_2) {
+                val expectedWinner = if (initialState.turn == PieceColor.WHITE) {
+                    GameResult.WHITE_WINS_CHECKMATE
+                } else {
+                    GameResult.BLACK_WINS_CHECKMATE
+                }
                 val result = state.evaluateGameResult()
                 assertEquals(
                     "Puzzle ${puzzle.id} did not end in checkmate (got $result)",
-                    GameResult.WHITE_WINS_CHECKMATE,
+                    expectedWinner,
                     result
                 )
             }
@@ -75,10 +88,11 @@ class ChessEngineAndPuzzlesTest {
     @Test
     fun verifyExpandedPersonasPieceStylesAndBoardThemes() {
         assertEquals(8, BotPersona.entries.size)
-        assertEquals(6, PieceStyle.entries.size)
-        assertEquals(8, BoardTheme.entries.size)
+        assertEquals(16, PieceStyle.entries.size)
+        assertEquals(12, BoardTheme.entries.size)
+        assertEquals(8, SoundProfile.entries.size)
         assertEquals(4, TimeControl.entries.size)
-        assertEquals(13, EnginePersonality.entries.size)
+        assertEquals(50, EnginePersonality.entries.size)
         assertEquals(5, StrengthTier.entries.size)
 
         val state = ChessBoardState.initial()

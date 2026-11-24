@@ -1,0 +1,15 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="64dp"
+    android:height="64dp"
+    android:viewportWidth="45"
+    android:viewportHeight="45">
+    <path android:pathData="M 22,10 C 32.5,11 38.5,18 38,39 L 15,39 C 15,30 25,32.5 23,18" android:fillColor="#000000" android:fillType="evenOdd" android:strokeColor="#000000" android:strokeWidth="1" android:strokeLineCap="round" android:strokeLineJoin="miter" />
+    <path android:pathData="M 24,18 C 24.384,20.911 18.447,25.369 16,27 C 13,29 13.181,31.343 11,31 C 9.9583,30.056 12.413,27.962 11,28 C 10,28 11.187,29.232 10,30 C 9,30 5.9968,31 6,26 C 6,24 12,14 12,14 C 12,14 13.886,12.098 14,10.5 C 13.274,9.5056 13.5,8.5 13.5,7.5 C 14.5,6.5 16.5,10 16.5,10 L 18.5,10 C 18.5,10 19.282,8.0081 21,7 C 22,7 22,10 22,10" android:fillColor="#000000" android:fillType="evenOdd" android:strokeColor="#000000" android:strokeWidth="1" android:strokeLineCap="round" android:strokeLineJoin="round" />
+    <group android:translateX="0.5" android:translateY="2">
+        <path android:pathData="M 9 23.5 A 0.5 0.5 0 1 1  8,23.5 A 0.5 0.5 0 1 1  9 23.5 z" android:fillColor="#000000" android:strokeColor="#FFFFFF" android:strokeWidth="1" android:strokeLineCap="round" android:strokeLineJoin="round" />
+    </group>
+    <group android:translateX="9.6926" android:translateY="-5.1734" android:rotation="30.001" android:scaleX="0.99998" android:scaleY="0.99998">
+        <path android:pathData="M 15 15.5 A 0.5 1.5 0 1 1  14,15.5 A 0.5 1.5 0 1 1  15 15.5 z" android:fillColor="#000000" android:strokeColor="#FFFFFF" android:strokeWidth="1" android:strokeLineCap="round" android:strokeLineJoin="round" />
+    </group>
+    <path android:pathData="M 24.55,10.4 L 24.25,11.5 L 24.8,11.6 C 27.901,12.077 31.124,13.834 33.375,18.094 C 35.626,22.353 36.297,29.057 35.8,39 L 35.75,39.5 L 37.5,39.5 L 37.5,39 C 38.003,28.943 36.624,22.147 34.25,17.656 C 31.876,13.166 28.461,11.023 25.063,10.5 L 24.55,10.4 z" android:fillColor="#FFFFFF" android:fillType="evenOdd" />
+</vector>

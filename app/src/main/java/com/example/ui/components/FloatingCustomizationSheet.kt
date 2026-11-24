@@ -101,13 +101,13 @@ fun FloatingCustomizationSheetContent(
                         contentAlignment = Alignment.Center
                     ) {
                         val previewFraction = ((widthDp - 180) / 380f).coerceIn(0f, 1f)
-                        val previewBoxSize = (118 + (previewFraction * 66)).dp
+                        val previewBoxSize = (122 + (previewFraction * 66)).dp
                         Surface(
                             modifier = Modifier
-                                .size(width = previewBoxSize, height = previewBoxSize + 24.dp)
+                                .size(width = previewBoxSize, height = previewBoxSize + 52.dp)
                                 .alpha(opacityPercent / 100f),
                             shape = RoundedCornerShape(frameShape.cornerDp.dp),
-                            color = MaterialTheme.colorScheme.surface,
+                            color = MaterialTheme.colorScheme.surfaceVariant,
                             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
                             shadowElevation = 6.dp
                         ) {
@@ -117,24 +117,34 @@ fun FloatingCustomizationSheetContent(
                             ) {
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceEvenly
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
                                 ) {
-                                    listOf("•••", "✎", "↩", "⇅", "⋮⋮").forEach { sym ->
+                                    listOf("•••", "✎", "↩", "⇅", "⋮⋮").forEachIndexed { idx, sym ->
                                         Surface(
-                                            shape = RoundedCornerShape(6.dp),
-                                            color = MaterialTheme.colorScheme.surfaceVariant,
-                                            border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outline)
+                                            modifier = Modifier.weight(1f),
+                                            shape = RoundedCornerShape(10.dp),
+                                            color = MaterialTheme.colorScheme.surface,
+                                            border = BorderStroke(0.6.dp, MaterialTheme.colorScheme.outline)
                                         ) {
-                                            Text(
-                                                text = sym,
-                                                fontSize = 9.sp,
-                                                color = MaterialTheme.colorScheme.onSurface,
-                                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
-                                            )
+                                            Box(
+                                                modifier = Modifier.padding(vertical = 3.dp),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Text(
+                                                    text = sym,
+                                                    fontSize = 9.sp,
+                                                    color = if (idx == 4) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                                )
+                                            }
                                         }
                                     }
                                 }
-                                Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape((frameShape.cornerDp - 3).coerceAtLeast(0).dp))
+                                ) {
                                     ChessBoardView(
                                         boardState = previewBoard,
                                         boardTheme = prefs.boardTheme,
@@ -147,6 +157,37 @@ fun FloatingCustomizationSheetContent(
                                         interactive = false,
                                         onSquareClick = {}
                                     )
+                                }
+                                Surface(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = MaterialTheme.colorScheme.surface,
+                                    border = BorderStroke(0.6.dp, MaterialTheme.colorScheme.outline)
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 6.dp, vertical = 3.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "−  +  ▢",
+                                            fontSize = 8.sp,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                        Text(
+                                            text = "دورك",
+                                            fontSize = 8.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        Text(
+                                            text = "◢",
+                                            fontSize = 9.sp,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
                                 }
                             }
                         }

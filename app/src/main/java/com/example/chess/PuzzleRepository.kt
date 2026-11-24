@@ -22,7 +22,7 @@ data class ChessPuzzle(
 
 object PuzzleRepository {
 
-    val puzzles: List<ChessPuzzle> = listOf(
+    private val originalPuzzles: List<ChessPuzzle> = listOf(
         // Mate in 1
         ChessPuzzle(
             id = "p_m1_1",
@@ -181,6 +181,12 @@ object PuzzleRepository {
             explanationAr = "النقلة b6 تخلق اختراقاً لا يمكن إيقافه؛ فأي أسر يسمح للبيدق المقابل بالعبور."
         )
     )
+
+    val puzzles: List<ChessPuzzle> = originalPuzzles +
+        mateInOnePuzzlePack +
+        mateInTwoPuzzlePack +
+        tacticsPuzzlePack +
+        endgamesPuzzlePack
 
     fun dailyPuzzleForToday(playerElo: Int): ChessPuzzle {
         val cal = Calendar.getInstance()

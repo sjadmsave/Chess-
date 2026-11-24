@@ -39,12 +39,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.example.chess.ChessBoardState
 import com.example.chess.ChessPuzzle
+import com.example.chess.PieceColor
 import com.example.chess.PuzzleCategory
 import com.example.chess.PuzzleRepository
 import com.example.chess.Square
@@ -53,6 +56,7 @@ import com.example.data.UserPreferences
 import com.example.ui.components.ChessBoardView
 import com.example.ui.theme.MonoFontFamily
 import com.example.ui.theme.MoveBlunderColor
+import com.example.ui.theme.formatArabicNumber
 import com.example.viewmodel.ActivePuzzleUiState
 
 @Composable
@@ -67,12 +71,21 @@ fun PuzzlesScreen(
 ) {
     val haptic = LocalHapticFeedback.current
     var selectedCategory by remember { mutableStateOf<PuzzleCategory?>(null) }
+    var unsolvedOnly by remember { mutableStateOf(false) }
     val solvedIds = remember(solvedRecords) { solvedRecords.map { it.puzzleId }.toSet() }
     val dailyPuzzle = remember(prefs.playerElo) { PuzzleRepository.dailyPuzzleForToday(prefs.playerElo) }
+    val puzzleInitialTurn = remember(puzzleState.puzzle.id) {
+        ChessBoardState.fromFen(puzzleState.puzzle.fen).turn
+    }
+    val categoryCounts = remember {
+        PuzzleCategory.entries.associateWith { cat -> PuzzleRepository.puzzles.count { it.category == cat } }
+    }
 
-    val filteredPuzzles = remember(selectedCategory) {
-        if (selectedCategory == null) PuzzleRepository.puzzles
-        else PuzzleRepository.puzzles.filter { it.category == selectedCategory }
+    val filteredPuzzles = remember(selectedCategory, unsolvedOnly, solvedIds) {
+        PuzzleRepository.puzzles.filter { p ->
+            (selectedCategory == null || p.category == selectedCategory) &&
+                (!unsolvedOnly || p.id !in solvedIds)
+        }
     }
 
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
@@ -80,7 +93,7 @@ fun PuzzlesScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .widthIn(max = 680.dp),
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 104.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             item {
@@ -92,7 +105,7 @@ fun PuzzlesScreen(
                     Column {
                         Text("الألغاز والتحدي اليومي", style = MaterialTheme.typography.headlineSmall)
                         Text(
-                            text = "تم حل ${solvedIds.size} من ${PuzzleRepository.puzzles.size} لغز تكتيكي",
+                            text = "تم حل ${formatArabicNumber(solvedIds.size)} من ${formatArabicNumber(PuzzleRepository.puzzles.size)} لغز تكتيكي",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -113,7 +126,7 @@ fun PuzzlesScreen(
                                 modifier = Modifier.size(16.dp)
                             )
                             Text(
-                                text = "سلسلة ${prefs.dailyStreak}",
+                                text = "سلسلة ${formatArabicNumber(prefs.dailyStreak)}",
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.Bold
                             )
@@ -156,12 +169,12 @@ fun PuzzlesScreen(
                                                 style = MaterialTheme.typography.labelSmall,
                                                 color = MaterialTheme.colorScheme.secondary,
                                                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                            )
+                                             )
                                         }
                                     }
                                 }
                                 Text(
-                                    text = "${puzzleState.puzzle.category.labelAr} • ${puzzleState.puzzle.rating} ELO",
+                                    text = "${puzzleState.puzzle.category.labelAr} • ${formatArabicNumber(puzzleState.puzzle.rating)} ELO • الدور ${if (puzzleInitialTurn == PieceColor.WHITE) "للأبيض" else "للأسود"}",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -176,15 +189,20 @@ fun PuzzlesScreen(
                             legalMovesForSelected = puzzleState.legalMovesForSelected,
                             lastMove = null,
                             hintMove = puzzleState.hintArrowMove,
-                            flipped = false,
+                            flipped = puzzleInitialTurn == PieceColor.BLACK,
                             interactive = !puzzleState.isSolved,
                             boardMaterial = prefs.boardMaterial,
                             showLastMove = prefs.showLastMove,
                             showLegalMoves = prefs.showLegalMoves,
                             useRingsInsteadOfDots = prefs.useRingsInsteadOfDots,
-                            selectedHighlightColor = androidx.compose.ui.graphics.Color(prefs.selectedColorHex),
-                            lastMoveHighlightColor = androidx.compose.ui.graphics.Color(prefs.lastMoveColorHex),
-                            legalMoveIndicatorColor = androidx.compose.ui.graphics.Color(prefs.legalMoveColorHex),
+                            selectedHighlightColor = Color(prefs.selectedColorHex),
+                            lastMoveHighlightColor = Color(prefs.lastMoveColorHex),
+                            legalMoveIndicatorColor = Color(prefs.legalMoveColorHex),
+                            lastMoveHighlightStyle = prefs.lastMoveHighlightStyle,
+                            showCoordinates = prefs.showCoordinates,
+                            pieceAnimationStyle = prefs.pieceAnimationStyle,
+                            enlargeOnDrag = prefs.enlargeOnDrag,
+                            boardScalePercent = prefs.boardScalePercent,
                             onSquareClick = { sq ->
                                 if (prefs.hapticsEnabled) haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                 onSquareClick(sq)
@@ -260,21 +278,30 @@ fun PuzzlesScreen(
                 }
             }
 
-            // Category Filter Chips
+            // Category Filter Chips + Unsolved Only Toggle
             item {
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     item {
                         FilterChip(
+                            selected = unsolvedOnly,
+                            onClick = { unsolvedOnly = !unsolvedOnly },
+                            label = { Text("غير المحلولة فقط") },
+                            modifier = Modifier.testTag("puzzles_unsolved_filter")
+                        )
+                    }
+                    item {
+                        FilterChip(
                             selected = selectedCategory == null,
                             onClick = { selectedCategory = null },
-                            label = { Text("الكل") }
+                            label = { Text("الكل (${formatArabicNumber(PuzzleRepository.puzzles.size)})") }
                         )
                     }
                     items(PuzzleCategory.entries) { cat ->
+                        val count = categoryCounts[cat] ?: 0
                         FilterChip(
                             selected = selectedCategory == cat,
                             onClick = { selectedCategory = cat },
-                            label = { Text(cat.labelAr) }
+                            label = { Text("${cat.labelAr} (${formatArabicNumber(count)})") }
                         )
                     }
                 }

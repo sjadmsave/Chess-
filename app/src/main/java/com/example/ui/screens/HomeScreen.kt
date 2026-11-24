@@ -32,6 +32,7 @@ import androidx.compose.material.icons.rounded.Extension
 import androidx.compose.material.icons.rounded.Group
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.LocalFireDepartment
+import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.PictureInPictureAlt
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Star
@@ -42,6 +43,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
@@ -91,7 +93,9 @@ fun HomeScreen(
     onOpenImportDialog: () -> Unit,
     onOpenDailyPuzzle: () -> Unit,
     onOpenStats: () -> Unit,
-    onOpenAboutLicenses: () -> Unit
+    onOpenAboutLicenses: () -> Unit,
+    onOpenPersonalitySheet: () -> Unit = {},
+    onOpenDrawer: () -> Unit = {}
 ) {
     var showNewMatchDialog by remember { mutableStateOf(false) }
 
@@ -130,18 +134,38 @@ fun HomeScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column {
-                        Text(
-                            text = "رُقعة",
-                            style = MaterialTheme.typography.headlineMedium,
-                            fontWeight = FontWeight.ExtraBold,
-                            color = MaterialTheme.colorScheme.onBackground
-                        )
-                        Text(
-                            text = "محرك Stockfish ذكي • تحليل وتدريب أوفلاين بالكامل",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        IconButton(
+                            onClick = onOpenDrawer,
+                            modifier = Modifier
+                                .size(48.dp)
+                                .testTag("open_nav_drawer_btn")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Menu,
+                                contentDescription = "القائمة الجانبية",
+                                tint = MaterialTheme.colorScheme.onBackground
+                            )
+                        }
+                        Column {
+                            Text(
+                                text = "رُقعة",
+                                style = MaterialTheme.typography.headlineMedium,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = MaterialTheme.colorScheme.onBackground
+                            )
+                            Text(
+                                text = "محرك Stockfish ذكي • تحليل وتدريب أوفلاين بالكامل",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
                     }
 
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -445,6 +469,7 @@ fun HomeScreen(
     if (showNewMatchDialog) {
         NewMatchWizardDialog(
             prefs = prefs,
+            onOpenPersonalitySheet = onOpenPersonalitySheet,
             onStartCustom = { color, elo, personality, humanStyle, timeControl ->
                 showNewMatchDialog = false
                 onStartCustomMatch(color, elo, personality, humanStyle, timeControl)
@@ -520,6 +545,7 @@ private fun HomeActionTile(
 @Composable
 private fun NewMatchWizardDialog(
     prefs: UserPreferences,
+    onOpenPersonalitySheet: () -> Unit,
     onStartCustom: (PieceColor, Int, EnginePersonality, Boolean, TimeControl) -> Unit,
     onStartBot: (BotPersona, PieceColor, Boolean, TimeControl) -> Unit,
     onStartLocal: (TimeControl) -> Unit,
@@ -528,7 +554,7 @@ private fun NewMatchWizardDialog(
     var mode by remember { mutableStateOf(GameMode.VS_ENGINE) }
     var selectedColor by remember { mutableStateOf(PieceColor.WHITE) }
     var elo by remember { mutableIntStateOf(prefs.effectiveEngineElo) }
-    var personality by remember { mutableStateOf(prefs.enginePersonality) }
+    var personality by remember(prefs.enginePersonality) { mutableStateOf(prefs.enginePersonality) }
     var humanStyle by remember { mutableStateOf(prefs.humanStyleEnabled) }
     var selectedBot by remember { mutableStateOf(BotPersona.byId(prefs.selectedBotId)) }
     var selectedTimeControl by remember { mutableStateOf(TimeControl.UNLIMITED) }
@@ -606,7 +632,22 @@ private fun NewMatchWizardDialog(
                         }
 
                         item {
-                            Text("شخصية المحرك:", style = MaterialTheme.typography.labelLarge)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "شخصية المحرك (${formatArabicNumber(EnginePersonality.entries.size)}):",
+                                    style = MaterialTheme.typography.labelLarge
+                                )
+                                TextButton(
+                                    onClick = onOpenPersonalitySheet,
+                                    modifier = Modifier.testTag("wizard_browse_personalities_btn")
+                                ) {
+                                    Text("بحث وتصنيف")
+                                }
+                            }
                             LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                 items(EnginePersonality.entries) { p ->
                                     FilterChip(
@@ -616,6 +657,11 @@ private fun NewMatchWizardDialog(
                                     )
                                 }
                             }
+                            Text(
+                                text = "${personality.nameAr}: ${personality.descriptionAr}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
 
                         item {

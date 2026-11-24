@@ -65,6 +65,7 @@ android {
   }
   testOptions { unitTests { isIncludeAndroidResources = true } }
   packaging { jniLibs { useLegacyPackaging = true } }
+  androidResources { noCompress += "nnue" }
   dependenciesInfo {
     includeInApk = false
     includeInBundle = true

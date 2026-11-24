@@ -32,6 +32,49 @@ object ChessCoachAnalyzer {
         }
     }
 
+    fun toFigurineSan(san: String): String {
+        if (san.isBlank()) return san
+        val sb = StringBuilder(san.length)
+        for (ch in san) {
+            when (ch) {
+                'K' -> sb.append('♔')
+                'Q' -> sb.append('♕')
+                'R' -> sb.append('♖')
+                'B' -> sb.append('♗')
+                'N' -> sb.append('♘')
+                else -> sb.append(ch)
+            }
+        }
+        return sb.toString()
+    }
+
+    /**
+     * Detects immediate tactical threats created by the side NOT to move
+     * against the current side to move's pieces (or undefended / high-value captures).
+     */
+    fun detectThreats(state: ChessBoardState): List<ThreatArrow> {
+        val defenderColor = state.turn
+        val attackerColor = defenderColor.opposite()
+        val attackerState = if (state.turn == attackerColor) state else state.copyWithNullMove()
+        val attackerMoves = attackerState.generatePseudoLegalMoves(attackerColor)
+        val threats = mutableListOf<ThreatArrow>()
+        val seenTargets = mutableSetOf<Square>()
+
+        for (mv in attackerMoves) {
+            val target = state.pieceAt(mv.to) ?: continue
+            if (target.color != defenderColor || target.type == PieceType.KING) continue
+            val attackerPiece = state.pieceAt(mv.from) ?: continue
+            val isUndefended = !state.isSquareAttacked(mv.to, defenderColor)
+            val winningExchange = attackerPiece.type.valueCp < target.type.valueCp
+            if (isUndefended || winningExchange) {
+                if (seenTargets.add(mv.to)) {
+                    threats.add(ThreatArrow(from = mv.from, to = mv.to, targetPiece = target))
+                }
+            }
+        }
+        return threats.sortedByDescending { it.targetPiece.type.valueCp }.take(4)
+    }
+
     fun gradeLabelFromLoss(cpLoss: Int?): String {
         if (cpLoss == null) return "تحليل غير مكتمل"
         return when {
@@ -233,6 +276,7 @@ object ChessCoachAnalyzer {
         val playerAccuracy = computeAccuracy(playerMoves)
         val opponentAccuracy = computeAccuracy(opponentMoves)
         val acpl = if (playerMoves.isEmpty()) 0 else playerMoves.map { it.centipawnLoss }.average().roundToInt()
+        val opponentAcpl = if (opponentMoves.isEmpty()) 0 else opponentMoves.map { it.centipawnLoss }.average().roundToInt()
 
         val openingAcc = computeAccuracy(playerMoves.filter { it.phase == GamePhase.OPENING })
         val midAcc = computeAccuracy(playerMoves.filter { it.phase == GamePhase.MIDDLEGAME })
@@ -240,6 +284,9 @@ object ChessCoachAnalyzer {
 
         val qualityCounts = MoveQuality.entries.associateWith { q ->
             playerMoves.count { it.quality == q }
+        }
+        val opponentQualityCounts = MoveQuality.entries.associateWith { q ->
+            opponentMoves.count { it.quality == q }
         }
 
         val uciList = moves.map { it.move.toUci() }
@@ -329,11 +376,13 @@ object ChessCoachAnalyzer {
             playerAccuracy = playerAccuracy,
             opponentAccuracy = opponentAccuracy,
             acpl = acpl,
+            opponentAcpl = opponentAcpl,
             openingNameAr = openingName,
             openingAccuracy = openingAcc,
             middlegameAccuracy = midAcc,
             endgameAccuracy = endAcc,
             qualityCounts = qualityCounts,
+            opponentQualityCounts = opponentQualityCounts,
             strengthsAr = strengths,
             weaknessesAr = weaknesses,
             diagnosisAr = diagnosis,

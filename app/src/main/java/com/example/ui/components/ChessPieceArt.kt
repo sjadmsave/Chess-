@@ -1,6 +1,8 @@
 package com.example.ui.components
 
+import androidx.annotation.DrawableRes
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -14,9 +16,12 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
+import com.example.R
 import com.example.chess.ChessPiece
 import com.example.chess.PieceColor
 import com.example.chess.PieceStyle
@@ -31,12 +36,110 @@ fun ChessPieceGraphic(
 ) {
     val sizeMod = if (pieceSize != null) modifier.size(pieceSize) else modifier
     val colorName = if (piece.color == PieceColor.WHITE) "أبيض" else "أسود"
-    Canvas(
-        modifier = sizeMod.semantics {
-            contentDescription = "${piece.type.nameAr} $colorName"
+    val pyChessRes = resolvePyChessDrawable(pieceStyle, piece)
+    if (pyChessRes != null) {
+        Image(
+            painter = painterResource(id = pyChessRes),
+            contentDescription = "${piece.type.nameAr} $colorName",
+            contentScale = ContentScale.Fit,
+            modifier = sizeMod
+        )
+    } else {
+        Canvas(
+            modifier = sizeMod.semantics {
+                contentDescription = "${piece.type.nameAr} $colorName"
+            }
+        ) {
+            drawChessPiece(piece, pieceStyle)
         }
-    ) {
-        drawChessPiece(piece, pieceStyle)
+    }
+}
+
+@DrawableRes
+fun resolvePyChessDrawable(style: PieceStyle, piece: ChessPiece): Int? {
+    val isW = piece.color == PieceColor.WHITE
+    return when (style) {
+        PieceStyle.CBURNETT -> when (piece.type) {
+            PieceType.KING -> if (isW) R.drawable.pc_cburnett_wk else R.drawable.pc_cburnett_bk
+            PieceType.QUEEN -> if (isW) R.drawable.pc_cburnett_wq else R.drawable.pc_cburnett_bq
+            PieceType.ROOK -> if (isW) R.drawable.pc_cburnett_wr else R.drawable.pc_cburnett_br
+            PieceType.BISHOP -> if (isW) R.drawable.pc_cburnett_wb else R.drawable.pc_cburnett_bb
+            PieceType.KNIGHT -> if (isW) R.drawable.pc_cburnett_wn else R.drawable.pc_cburnett_bn
+            PieceType.PAWN -> if (isW) R.drawable.pc_cburnett_wp else R.drawable.pc_cburnett_bp
+        }
+        PieceStyle.CHESSNUT -> when (piece.type) {
+            PieceType.KING -> if (isW) R.drawable.pc_chessnut_wk else R.drawable.pc_chessnut_bk
+            PieceType.QUEEN -> if (isW) R.drawable.pc_chessnut_wq else R.drawable.pc_chessnut_bq
+            PieceType.ROOK -> if (isW) R.drawable.pc_chessnut_wr else R.drawable.pc_chessnut_br
+            PieceType.BISHOP -> if (isW) R.drawable.pc_chessnut_wb else R.drawable.pc_chessnut_bb
+            PieceType.KNIGHT -> if (isW) R.drawable.pc_chessnut_wn else R.drawable.pc_chessnut_bn
+            PieceType.PAWN -> if (isW) R.drawable.pc_chessnut_wp else R.drawable.pc_chessnut_bp
+        }
+        PieceStyle.COMPANION -> when (piece.type) {
+            PieceType.KING -> if (isW) R.drawable.pc_companion_wk else R.drawable.pc_companion_bk
+            PieceType.QUEEN -> if (isW) R.drawable.pc_companion_wq else R.drawable.pc_companion_bq
+            PieceType.ROOK -> if (isW) R.drawable.pc_companion_wr else R.drawable.pc_companion_br
+            PieceType.BISHOP -> if (isW) R.drawable.pc_companion_wb else R.drawable.pc_companion_bb
+            PieceType.KNIGHT -> if (isW) R.drawable.pc_companion_wn else R.drawable.pc_companion_bn
+            PieceType.PAWN -> if (isW) R.drawable.pc_companion_wp else R.drawable.pc_companion_bp
+        }
+        PieceStyle.MERIDA -> when (piece.type) {
+            PieceType.KING -> if (isW) R.drawable.pc_merida_wk else R.drawable.pc_merida_bk
+            PieceType.QUEEN -> if (isW) R.drawable.pc_merida_wq else R.drawable.pc_merida_bq
+            PieceType.ROOK -> if (isW) R.drawable.pc_merida_wr else R.drawable.pc_merida_br
+            PieceType.BISHOP -> if (isW) R.drawable.pc_merida_wb else R.drawable.pc_merida_bb
+            PieceType.KNIGHT -> if (isW) R.drawable.pc_merida_wn else R.drawable.pc_merida_bn
+            PieceType.PAWN -> if (isW) R.drawable.pc_merida_wp else R.drawable.pc_merida_bp
+        }
+        PieceStyle.ALPHA -> when (piece.type) {
+            PieceType.KING -> if (isW) R.drawable.pc_alpha_wk else R.drawable.pc_alpha_bk
+            PieceType.QUEEN -> if (isW) R.drawable.pc_alpha_wq else R.drawable.pc_alpha_bq
+            PieceType.ROOK -> if (isW) R.drawable.pc_alpha_wr else R.drawable.pc_alpha_br
+            PieceType.BISHOP -> if (isW) R.drawable.pc_alpha_wb else R.drawable.pc_alpha_bb
+            PieceType.KNIGHT -> if (isW) R.drawable.pc_alpha_wn else R.drawable.pc_alpha_bn
+            PieceType.PAWN -> if (isW) R.drawable.pc_alpha_wp else R.drawable.pc_alpha_bp
+        }
+        PieceStyle.LEIPZIG -> when (piece.type) {
+            PieceType.KING -> if (isW) R.drawable.pc_leipzig_wk else R.drawable.pc_leipzig_bk
+            PieceType.QUEEN -> if (isW) R.drawable.pc_leipzig_wq else R.drawable.pc_leipzig_bq
+            PieceType.ROOK -> if (isW) R.drawable.pc_leipzig_wr else R.drawable.pc_leipzig_br
+            PieceType.BISHOP -> if (isW) R.drawable.pc_leipzig_wb else R.drawable.pc_leipzig_bb
+            PieceType.KNIGHT -> if (isW) R.drawable.pc_leipzig_wn else R.drawable.pc_leipzig_bn
+            PieceType.PAWN -> if (isW) R.drawable.pc_leipzig_wp else R.drawable.pc_leipzig_bp
+        }
+        PieceStyle.STAUNTY -> when (piece.type) {
+            PieceType.KING -> if (isW) R.drawable.pc_staunty_wk else R.drawable.pc_staunty_bk
+            PieceType.QUEEN -> if (isW) R.drawable.pc_staunty_wq else R.drawable.pc_staunty_bq
+            PieceType.ROOK -> if (isW) R.drawable.pc_staunty_wr else R.drawable.pc_staunty_br
+            PieceType.BISHOP -> if (isW) R.drawable.pc_staunty_wb else R.drawable.pc_staunty_bb
+            PieceType.KNIGHT -> if (isW) R.drawable.pc_staunty_wn else R.drawable.pc_staunty_bn
+            PieceType.PAWN -> if (isW) R.drawable.pc_staunty_wp else R.drawable.pc_staunty_bp
+        }
+        PieceStyle.TATIANA -> when (piece.type) {
+            PieceType.KING -> if (isW) R.drawable.pc_tatiana_wk else R.drawable.pc_tatiana_bk
+            PieceType.QUEEN -> if (isW) R.drawable.pc_tatiana_wq else R.drawable.pc_tatiana_bq
+            PieceType.ROOK -> if (isW) R.drawable.pc_tatiana_wr else R.drawable.pc_tatiana_br
+            PieceType.BISHOP -> if (isW) R.drawable.pc_tatiana_wb else R.drawable.pc_tatiana_bb
+            PieceType.KNIGHT -> if (isW) R.drawable.pc_tatiana_wn else R.drawable.pc_tatiana_bn
+            PieceType.PAWN -> if (isW) R.drawable.pc_tatiana_wp else R.drawable.pc_tatiana_bp
+        }
+        PieceStyle.FRESCA -> when (piece.type) {
+            PieceType.KING -> if (isW) R.drawable.pc_fresca_wk else R.drawable.pc_fresca_bk
+            PieceType.QUEEN -> if (isW) R.drawable.pc_fresca_wq else R.drawable.pc_fresca_bq
+            PieceType.ROOK -> if (isW) R.drawable.pc_fresca_wr else R.drawable.pc_fresca_br
+            PieceType.BISHOP -> if (isW) R.drawable.pc_fresca_wb else R.drawable.pc_fresca_bb
+            PieceType.KNIGHT -> if (isW) R.drawable.pc_fresca_wn else R.drawable.pc_fresca_bn
+            PieceType.PAWN -> if (isW) R.drawable.pc_fresca_wp else R.drawable.pc_fresca_bp
+        }
+        PieceStyle.KOSAL -> when (piece.type) {
+            PieceType.KING -> if (isW) R.drawable.pc_kosal_wk else R.drawable.pc_kosal_bk
+            PieceType.QUEEN -> if (isW) R.drawable.pc_kosal_wq else R.drawable.pc_kosal_bq
+            PieceType.ROOK -> if (isW) R.drawable.pc_kosal_wr else R.drawable.pc_kosal_br
+            PieceType.BISHOP -> if (isW) R.drawable.pc_kosal_wb else R.drawable.pc_kosal_bb
+            PieceType.KNIGHT -> if (isW) R.drawable.pc_kosal_wn else R.drawable.pc_kosal_bn
+            PieceType.PAWN -> if (isW) R.drawable.pc_kosal_wp else R.drawable.pc_kosal_bp
+        }
+        else -> null
     }
 }
 
@@ -134,6 +237,20 @@ private fun paletteFor(isWhite: Boolean, style: PieceStyle): PiecePalette = when
             strokeColor = Color(0xFFFBBF24),
             detailColor = Color(0xFF38BDF8),
             glowColor = Color(0x55FBBF24)
+        )
+    }
+
+    else -> if (isWhite) {
+        PiecePalette(
+            fillBrush = Brush.verticalGradient(listOf(Color(0xFFFFFDF7), Color(0xFFE9E2D0), Color(0xFFD5CAB2))),
+            strokeColor = Color(0xFF2B2620),
+            detailColor = Color(0xFF473E33)
+        )
+    } else {
+        PiecePalette(
+            fillBrush = Brush.verticalGradient(listOf(Color(0xFF3E4554), Color(0xFF1F242E), Color(0xFF10131A))),
+            strokeColor = Color(0xFFE2E8F0),
+            detailColor = Color(0xFFCBD5E1)
         )
     }
 }

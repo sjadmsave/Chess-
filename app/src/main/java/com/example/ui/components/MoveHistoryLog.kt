@@ -23,10 +23,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.FormatListBulleted
+import androidx.compose.material.icons.automirrored.rounded.LastPage
 import androidx.compose.material.icons.rounded.ChevronLeft
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.FirstPage
-import androidx.compose.material.icons.rounded.LastPage
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -51,6 +51,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.chess.ChessCoachAnalyzer
 import com.example.chess.MoveQuality
 import com.example.chess.PieceColor
 import com.example.chess.RecordedMove
@@ -117,6 +118,9 @@ fun CompactMoveHistoryStrip(
     openingNameAr: String,
     activeReviewIndex: Int?,
     playerColor: PieceColor,
+    figurineNotation: Boolean = true,
+    showMyMoveStrength: Boolean = true,
+    showOpponentMoveStrength: Boolean = true,
     onSelectMove: (Int?) -> Unit,
     onOpenFullLedger: () -> Unit,
     modifier: Modifier = Modifier
@@ -204,22 +208,26 @@ fun CompactMoveHistoryStrip(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                                 if (turn.whiteMove != null && turn.whiteIndex != null) {
+                                    val showQ = if (turn.whiteMove.color == playerColor) showMyMoveStrength else showOpponentMoveStrength
                                     AlgebraicMoveChip(
                                         move = turn.whiteMove,
                                         isSelected = activeReviewIndex == turn.whiteIndex ||
                                             (activeReviewIndex == null && turn.whiteIndex == moves.lastIndex),
-                                        showQuality = turn.whiteMove.color == playerColor,
+                                        showQuality = showQ,
+                                        figurineNotation = figurineNotation,
                                         onClick = {
                                             onSelectMove(if (activeReviewIndex == turn.whiteIndex) null else turn.whiteIndex)
                                         }
                                     )
                                 }
                                 if (turn.blackMove != null && turn.blackIndex != null) {
+                                    val showQ = if (turn.blackMove.color == playerColor) showMyMoveStrength else showOpponentMoveStrength
                                     AlgebraicMoveChip(
                                         move = turn.blackMove,
                                         isSelected = activeReviewIndex == turn.blackIndex ||
                                             (activeReviewIndex == null && turn.blackIndex == moves.lastIndex),
-                                        showQuality = turn.blackMove.color == playerColor,
+                                        showQuality = showQ,
+                                        figurineNotation = figurineNotation,
                                         onClick = {
                                             onSelectMove(if (activeReviewIndex == turn.blackIndex) null else turn.blackIndex)
                                         }
@@ -239,9 +247,11 @@ private fun AlgebraicMoveChip(
     move: RecordedMove,
     isSelected: Boolean,
     showQuality: Boolean,
+    figurineNotation: Boolean,
     onClick: () -> Unit
 ) {
     val qColor = Color(move.quality.colorHex)
+    val displaySan = if (figurineNotation) ChessCoachAnalyzer.toFigurineSan(move.san) else move.san
     Surface(
         shape = RoundedCornerShape(6.dp),
         color = if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.25f) else Color.Transparent,
@@ -254,7 +264,7 @@ private fun AlgebraicMoveChip(
             horizontalArrangement = Arrangement.spacedBy(3.dp)
         ) {
             Text(
-                text = move.san,
+                text = displaySan,
                 fontFamily = MonoFontFamily,
                 fontSize = 12.sp,
                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
@@ -272,6 +282,71 @@ private fun AlgebraicMoveChip(
     }
 }
 
+@Composable
+fun MoveQualitySummaryBar(
+    moves: List<RecordedMove>,
+    playerColor: PieceColor,
+    includeOpponent: Boolean = true,
+    modifier: Modifier = Modifier
+) {
+    val targetMoves = remember(moves, playerColor, includeOpponent) {
+        if (includeOpponent) moves else moves.filter { it.color == playerColor }
+    }
+    val counts = remember(targetMoves) {
+        MoveQuality.entries.associateWith { q -> targetMoves.count { it.quality == q } }
+    }
+    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+        Surface(
+            modifier = modifier
+                .fillMaxWidth()
+                .testTag("move_quality_summary_bar"),
+            shape = RoundedCornerShape(10.dp),
+            color = MaterialTheme.colorScheme.surface,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.7f))
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 5.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                MoveQuality.entries.forEach { quality ->
+                    val count = counts[quality] ?: 0
+                    val qColor = Color(quality.colorHex)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(3.dp)
+                    ) {
+                        Text(
+                            text = "$count",
+                            fontFamily = MonoFontFamily,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Box(
+                            modifier = Modifier
+                                .size(17.dp)
+                                .clip(CircleShape)
+                                .background(qColor),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = quality.badge,
+                                fontSize = 8.sp,
+                                fontWeight = FontWeight.Black,
+                                color = Color.White,
+                                lineHeight = 9.sp
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /**
  * Full Chess.com-style Turn-by-Turn Algebraic Notation Ledger + Evaluation Swing Graph + Playback Controls.
  */
@@ -281,6 +356,7 @@ fun MoveHistoryLedgerPanel(
     openingNameAr: String,
     activeReviewIndex: Int?,
     playerColor: PieceColor,
+    figurineNotation: Boolean = true,
     onSelectMove: (Int?) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -421,6 +497,7 @@ fun MoveHistoryLedgerPanel(
                                 move = turn.whiteMove,
                                 selected = turn.whiteIndex != null && turn.whiteIndex == currentIdx,
                                 showBadge = turn.whiteMove?.color == playerColor,
+                                figurineNotation = figurineNotation,
                                 onClick = { turn.whiteIndex?.let { onSelectMove(it) } },
                                 modifier = Modifier.weight(1f)
                             )
@@ -428,6 +505,7 @@ fun MoveHistoryLedgerPanel(
                                 move = turn.blackMove,
                                 selected = turn.blackIndex != null && turn.blackIndex == currentIdx,
                                 showBadge = turn.blackMove?.color == playerColor,
+                                figurineNotation = figurineNotation,
                                 onClick = { turn.blackIndex?.let { onSelectMove(it) } },
                                 modifier = Modifier.weight(1f)
                             )
@@ -487,7 +565,7 @@ fun MoveHistoryLedgerPanel(
                         enabled = activeReviewIndex != null,
                         modifier = Modifier.testTag("move_live_btn")
                     ) {
-                        Icon(Icons.Rounded.LastPage, contentDescription = "الوضع الحالي")
+                        Icon(Icons.AutoMirrored.Rounded.LastPage, contentDescription = "الوضع الحالي")
                     }
                 }
             }
@@ -500,6 +578,7 @@ private fun LedgerMoveCell(
     move: RecordedMove?,
     selected: Boolean,
     showBadge: Boolean,
+    figurineNotation: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -508,6 +587,7 @@ private fun LedgerMoveCell(
         return
     }
     val qColor = Color(move.quality.colorHex)
+    val displaySan = if (figurineNotation) ChessCoachAnalyzer.toFigurineSan(move.san) else move.san
     Surface(
         shape = RoundedCornerShape(6.dp),
         color = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.24f) else Color.Transparent,
@@ -521,7 +601,7 @@ private fun LedgerMoveCell(
             horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             Text(
-                text = move.san,
+                text = displaySan,
                 fontFamily = MonoFontFamily,
                 fontSize = 13.sp,
                 fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,

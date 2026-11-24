@@ -378,17 +378,19 @@ object ChessEngine {
             )
         }
 
-        // Opportunity Hunter short mate proof (mate <= 3, max 150ms, max 65k nodes)
-        if (personality == EnginePersonality.OPPORTUNITY_HUNTER && personalityIntensity > 0) {
+        // Tactical / mate hunter short mate proof (mate <= 3, max 150ms, max 65k nodes)
+        if ((personality == EnginePersonality.OPPORTUNITY_HUNTER ||
+                personality == EnginePersonality.CHECKMATE_ARTIST ||
+                personality == EnginePersonality.BLITZ_ASSASSIN) && personalityIntensity > 0
+        ) {
             findShortMateMove(state, maxMoves = 3, maxTimeMs = 150L, maxNodes = 65_000)?.let { mateMove ->
-                val next = state.copyWithMoveFast(mateMove)
                 return SearchResult(
                     bestMove = mateMove,
                     evalWhiteCp = if (state.turn == PieceColor.WHITE) MATE_SCORE - 2 else -(MATE_SCORE - 2),
                     depthReached = 5,
                     nodesSearched = 1500,
                     pvUci = listOf(mateMove.toUci()),
-                    sourceName = "صائد الفرص (كشف مات قصير)"
+                    sourceName = "${personality.nameAr} (كشف مات قصير)"
                 )
             }
         }
@@ -785,7 +787,9 @@ object ChessEngine {
         lastMoveFromWing: Int?,
         lastMovedPieceType: PieceType?
     ): Double {
+        if (personality == EnginePersonality.CLASSIC) return 0.0
         val piece = stateBefore.pieceAt(move.from) ?: return 0.0
+        val traits = personality.traits
         val phase = stateBefore.detectPhase()
         val earlyMove = stateBefore.fullMoveNumber <= 10
         val oppKing = afterState.findKing(afterState.turn)
@@ -794,116 +798,105 @@ object ChessEngine {
         val approachingKing = kingDistAfter < kingDistBefore
         val oppMobility = afterState.generateLegalMoves().size
         val repetition = (afterState.positionHistory[afterState.positionKey()] ?: 0) >= 2
-        val isHangingSacrifice = afterState.isSquareAttacked(move.to, afterState.turn) &&
-            !afterState.isSquareAttacked(move.to, stateBefore.turn) &&
-            move.capturedPiece == null
+        val defendedAfter = afterState.isSquareAttacked(move.to, stateBefore.turn)
+        val attackedAfter = afterState.isSquareAttacked(move.to, afterState.turn)
+        val isHangingSacrifice = attackedAfter && !defendedAfter && move.capturedPiece == null
 
-        return when (personality) {
-            EnginePersonality.CLASSIC -> 0.0
-            EnginePersonality.FIERCE_WARRIOR -> {
-                var f = 0.0
-                if (givesCheck) f += 18.0
-                if (approachingKing) f += 12.0
-                if (earlyMove && piece.type == PieceType.PAWN && (move.to.col >= 5 || move.to.col <= 2)) f += 10.0
-                if (move.capturedPiece != null && givesCheck) f += 12.0
-                f
+        var f = 0.0
+
+        // Center control
+        if (traits.centerWeight != 0f) {
+            if (move.to.row in 2..5 && move.to.col in 2..5) f += traits.centerWeight
+            if (move.to.row in 3..4 && move.to.col in 3..4) f += traits.centerWeight * 0.35
+        }
+        // Check & king approach
+        if (traits.checkWeight != 0f) {
+            if (givesCheck) f += traits.checkWeight
+            if (approachingKing) f += traits.checkWeight * 0.45
+        }
+        // Captures & aggression
+        if (traits.captureWeight != 0f && move.capturedPiece != null) {
+            f += traits.captureWeight
+        }
+        // Sacrifice appetite or sacrifice aversion
+        if (traits.sacWeight > 0f) {
+            if (isHangingSacrifice || (move.capturedPiece == null && approachingKing && oppKing != null && kingDistAfter <= 3)) {
+                f += traits.sacWeight
             }
-            EnginePersonality.IRON_FORTRESS -> {
-                var f = 0.0
-                if (move.isCastleKingside || move.isCastleQueenside) f += 26.0
-                if (afterState.isSquareAttacked(move.to, stateBefore.turn)) f += 9.0
-                if (move.capturedPiece != null) f += 8.0
-                if (isHangingSacrifice) f -= 20.0
-                f
-            }
-            EnginePersonality.STRATEGIC_GENIUS -> {
-                var f = 0.0
-                if (move.to.row in 2..5 && move.to.col in 2..5) f += 14.0
-                if (piece.type == PieceType.KNIGHT || piece.type == PieceType.BISHOP) f += 8.0
-                if (afterState.isSquareAttacked(move.to, stateBefore.turn)) f += 8.0
-                f
-            }
-            EnginePersonality.PATIENT_SERPENT -> {
-                var f = 0.0
-                f += (32 - oppMobility).coerceIn(-8, 18) * 0.8
-                if (move.to.row in 2..5 && move.to.col in 2..5) f += 10.0
-                if (move.capturedPiece != null && earlyMove) f -= 8.0
-                if (givesCheck && earlyMove) f -= 7.0
-                if (repetition) f -= 14.0
-                f
-            }
-            EnginePersonality.ENDGAME_MASTER -> {
-                var f = 0.0
-                if (phase == GamePhase.ENDGAME || piece.type == PieceType.PAWN) f += 12.0
-                if (piece.type == PieceType.KING && phase == GamePhase.ENDGAME && move.to.row in 2..5 && move.to.col in 2..5) f += 18.0
-                if (evalSideBeforeCp >= 80 && move.capturedPiece != null) f += 15.0
-                if (afterState.isSquareAttacked(move.to, stateBefore.turn)) f += 6.0
-                f
-            }
-            EnginePersonality.SACRIFICE_KING -> {
-                var f = 0.0
-                if (isHangingSacrifice || (move.capturedPiece == null && approachingKing)) f += 16.0
-                if (givesCheck) f += 16.0
-                if (oppKing != null && kingDistAfter <= 2) f += 14.0
-                f
-            }
-            EnginePersonality.BRILLIANCY_CREATOR -> {
-                var f = 0.0
-                // Quiet creative moves and calculated attacks without pointless blunders
-                if (move.capturedPiece == null && !givesCheck && move.to.row in 1..6 && move.to.col in 1..6) f += 11.0
-                if (approachingKing) f += 10.0
-                if (isHangingSacrifice && !afterState.isInCheck(afterState.turn)) f -= 12.0
-                f
-            }
-            EnginePersonality.MISTAKE_CATCHER -> {
-                var f = 0.0
-                f += (34 - oppMobility).coerceIn(-6, 16) * 0.9
-                if (move.capturedPiece != null) f += 10.0
-                if (givesCheck) f += 10.0
-                f
-            }
-            EnginePersonality.TRICKY_GENIUS -> {
-                var f = 0.0
-                if (move.capturedPiece == null && !givesCheck) f += 9.0
-                // Bait / counter-trap potential when opponent has few safe replies
-                f += (30 - oppMobility).coerceIn(-5, 15) * 0.85
-                if (approachingKing) f += 9.0
-                f
-            }
-            EnginePersonality.OPPORTUNITY_HUNTER -> {
-                var f = 0.0
-                if (move.capturedPiece != null) f += 14.0
-                if (move.promotion != null) f += 16.0
-                if (givesCheck) f += 12.0
-                f
-            }
-            EnginePersonality.LONG_GAME_MAKER -> {
-                var f = 0.0
-                if (evalSideBeforeCp >= 100) {
-                    if (move.capturedPiece != null) f -= 14.0
-                    if (givesCheck) f -= 12.0
-                    if (repetition) f -= 18.0
-                    f += 8.0
-                } else {
-                    if (move.to.row in 2..5 && move.to.col in 2..5) f += 9.0
-                    if (afterState.isSquareAttacked(move.to, stateBefore.turn)) f += 8.0
-                }
-                f
-            }
-            EnginePersonality.MYSTERY_PLAYER -> {
-                var f = 0.0
-                val wing = when {
-                    move.to.col <= 2 -> 0
-                    move.to.col >= 5 -> 2
-                    else -> 1
-                }
-                if (lastMoveFromWing != null && wing == lastMoveFromWing) f -= 9.0 else f += 6.0
-                if (lastMovedPieceType != null && piece.type == lastMovedPieceType) f -= 7.0 else f += 5.0
-                val hashSeed = gameSeed xor (stateBefore.fullMoveNumber.toLong() * 31L) xor move.toUci().hashCode().toLong()
-                val jitter = (Random(hashSeed).nextDouble() - 0.5) * 18.0
-                f + jitter
+        } else if (traits.sacWeight < 0f && isHangingSacrifice && !givesCheck) {
+            f += traits.sacWeight
+        }
+        // Pawn storms & wing attacks
+        if (traits.pawnStormWeight != 0f && piece.type == PieceType.PAWN) {
+            val rankSteps = abs(move.to.row - move.from.row)
+            f += traits.pawnStormWeight * (if (move.to.col >= 5 || move.to.col <= 2) 0.8 else 0.45) * rankSteps
+        }
+        // King safety & castling & piece protection
+        if (traits.kingSafetyWeight != 0f) {
+            if (move.isCastleKingside || move.isCastleQueenside) f += traits.kingSafetyWeight
+            if (defendedAfter) f += traits.kingSafetyWeight * 0.35
+        }
+        // Mobility restriction
+        if (traits.mobilityRestrictionWeight != 0f) {
+            f += (32 - oppMobility).coerceIn(-6, 18) * (traits.mobilityRestrictionWeight / 16.0)
+        }
+        // Simplify when ahead
+        if (traits.simplifyAdvantageWeight != 0f && evalSideBeforeCp >= 70 && move.capturedPiece != null) {
+            f += traits.simplifyAdvantageWeight
+        }
+        // Flank play
+        if (traits.flankWeight != 0f && (move.to.col <= 2 || move.to.col >= 5)) {
+            f += traits.flankWeight * 0.75
+        }
+        // Quiet positional / tricky moves
+        if (traits.quietTrapWeight != 0f && move.capturedPiece == null && !givesCheck && move.to.row in 1..6 && move.to.col in 1..6) {
+            f += traits.quietTrapWeight
+        }
+        // Open file & rook/bishop lines
+        if (traits.openFileWeight != 0f && (piece.type == PieceType.ROOK || piece.type == PieceType.BISHOP || piece.type == PieceType.QUEEN)) {
+            val fileClear = (0..7).none { r -> stateBefore.pieceAt(r, move.to.col)?.type == PieceType.PAWN }
+            if (fileClear || (piece.type == PieceType.ROOK && (move.to.row == 1 || move.to.row == 6))) {
+                f += traits.openFileWeight
             }
         }
+        // Endgame king activity & passed pawns
+        if (traits.endgameKingWeight != 0f && phase == GamePhase.ENDGAME) {
+            if (piece.type == PieceType.KING && move.to.row in 2..5 && move.to.col in 2..5) {
+                f += traits.endgameKingWeight
+            } else if (piece.type == PieceType.PAWN) {
+                f += traits.endgameKingWeight * 0.55
+            }
+        }
+        // Promotions
+        if (traits.promotionWeight != 0f && (move.promotion != null || (piece.type == PieceType.PAWN && (move.to.row <= 2 || move.to.row >= 5)))) {
+            f += if (move.promotion != null) traits.promotionWeight.toDouble() else (traits.promotionWeight * 0.45f).toDouble()
+        }
+        // Early capture / check avoidance for patient players
+        if (traits.avoidEarlyCapture && earlyMove) {
+            if (move.capturedPiece != null) f -= 8.0
+            if (givesCheck) f -= 7.0
+            if (repetition) f -= 14.0
+        }
+        // Delay winning trades for long-game makers
+        if (traits.delayWinningTrade && evalSideBeforeCp >= 100) {
+            if (move.capturedPiece != null) f -= 14.0
+            if (givesCheck) f -= 12.0
+            if (repetition) f -= 18.0
+        }
+        // Deterministic seeded diversity for mystery / adaptive / time-pressure archetypes
+        if (traits.mysteryDiversity) {
+            val wing = when {
+                move.to.col <= 2 -> 0
+                move.to.col >= 5 -> 2
+                else -> 1
+            }
+            if (lastMoveFromWing != null && wing == lastMoveFromWing) f -= 9.0 else f += 6.0
+            if (lastMovedPieceType != null && piece.type == lastMovedPieceType) f -= 7.0 else f += 5.0
+            val hashSeed = gameSeed xor (stateBefore.fullMoveNumber.toLong() * 31L) xor move.toUci().hashCode().toLong()
+            f += (Random(hashSeed).nextDouble() - 0.5) * 18.0
+        }
+
+        return f
     }
 
     private fun <T> softmaxSample(items: List<T>, temperature: Double, scoreFn: (T) -> Double): T {

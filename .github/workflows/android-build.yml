@@ -59,6 +59,11 @@ jobs:
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_native_stockfish == true }}
         shell: bash
         run: |
+          if [ -f app/src/main/jniLibs/arm64-v8a/libstockfish.so ] && [ -f app/src/main/jniLibs/x86_64/libstockfish.so ]; then
+            echo "::notice::Prebuilt PIE libstockfish.so binaries already bundled in jniLibs."
+            exit 0
+          fi
+
           SDK_DIR="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
           NDK_DIR="$SDK_DIR/ndk/27.2.12479018"
           if [ ! -d "$NDK_DIR" ]; then
@@ -73,41 +78,38 @@ jobs:
           export ANDROID_NDK_HOME="$NDK_DIR"
           SHIM_DIR="$RUNNER_TEMP/ndk-shims"
           mkdir -p "$SHIM_DIR"
-          for name in aarch64-linux-android-clang++ aarch64-linux-android21-clang++ aarch64-linux-android24-clang++; do
+          for name in aarch64-linux-android-clang++ aarch64-linux-android21-clang++ aarch64-linux-android24-clang++ aarch64-linux-android29-clang++; do
             ln -sf "$TOOLCHAIN_BIN/aarch64-linux-android24-clang++" "$SHIM_DIR/$name"
           done
-          for name in armv7a-linux-androideabi-clang++ armv7a-linux-androideabi16-clang++ armv7a-linux-androideabi21-clang++ armv7a-linux-androideabi24-clang++; do
-            ln -sf "$TOOLCHAIN_BIN/armv7a-linux-androideabi24-clang++" "$SHIM_DIR/$name"
-          done
-          for name in x86_64-linux-android-clang++ x86_64-linux-android21-clang++ x86_64-linux-android24-clang++; do
+          for name in x86_64-linux-android-clang++ x86_64-linux-android21-clang++ x86_64-linux-android24-clang++ x86_64-linux-android29-clang++; do
             ln -sf "$TOOLCHAIN_BIN/x86_64-linux-android24-clang++" "$SHIM_DIR/$name"
           done
           ln -sf "$TOOLCHAIN_BIN/llvm-strip" "$SHIM_DIR/strip" || true
           export PATH="$SHIM_DIR:$TOOLCHAIN_BIN:$PATH"
 
           rm -rf "$RUNNER_TEMP/Stockfish"
-          if ! git clone --depth 1 https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/Stockfish"; then
+          if ! git clone --depth 1 --branch sf_19 https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/Stockfish"; then
             echo "::warning::Could not clone Stockfish repository; continuing with built-in engine."
             exit 0
           fi
           cd "$RUNNER_TEMP/Stockfish/src"
 
-          if make -j"$(nproc)" build ARCH=armv8 COMP=ndk; then
+          if make -j"$(nproc)" all ARCH=armv8 COMP=ndk COMPCXX=aarch64-linux-android24-clang++ EXTRACXXFLAGS="-DNNUE_EMBEDDING_OFF"; then
             "$TOOLCHAIN_BIN/llvm-strip" stockfish || true
             mkdir -p "$GITHUB_WORKSPACE/app/src/main/jniLibs/arm64-v8a"
             cp stockfish "$GITHUB_WORKSPACE/app/src/main/jniLibs/arm64-v8a/libstockfish.so"
-            chmod +x "$GITHUB_WORKSPACE/app/src/main/jniLibs/arm64-v8a/libstockfish.so"
+            chmod 755 "$GITHUB_WORKSPACE/app/src/main/jniLibs/arm64-v8a/libstockfish.so"
             echo "::notice::Bundled native Stockfish for arm64-v8a"
           else
             echo "::warning::arm64-v8a Stockfish NDK build failed; continuing with built-in engine."
           fi
 
           make clean || true
-          if make -j"$(nproc)" build ARCH=x86-64 COMP=ndk; then
+          if make -j"$(nproc)" all ARCH=x86-64 COMP=ndk COMPCXX=x86_64-linux-android24-clang++ EXTRACXXFLAGS="-DNNUE_EMBEDDING_OFF"; then
             "$TOOLCHAIN_BIN/llvm-strip" stockfish || true
             mkdir -p "$GITHUB_WORKSPACE/app/src/main/jniLibs/x86_64"
             cp stockfish "$GITHUB_WORKSPACE/app/src/main/jniLibs/x86_64/libstockfish.so"
-            chmod +x "$GITHUB_WORKSPACE/app/src/main/jniLibs/x86_64/libstockfish.so"
+            chmod 755 "$GITHUB_WORKSPACE/app/src/main/jniLibs/x86_64/libstockfish.so"
             echo "::notice::Bundled native Stockfish for x86_64"
           fi
 

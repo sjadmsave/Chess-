@@ -18,6 +18,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -28,11 +29,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.RatingPointEntity
 import com.example.ui.theme.MonoFontFamily
+import com.example.ui.theme.formatArabicNumber
 import kotlin.math.max
 import kotlin.math.min
 
@@ -107,6 +111,90 @@ fun EvaluationBar(
                     color = if (topIsBlack) Color(0xFF0F172A) else Color(0xFFE2E8F0),
                     modifier = Modifier.padding(bottom = 3.dp)
                 )
+            }
+        }
+    }
+}
+
+@Composable
+fun HorizontalEvalBar(
+    evalWhiteCp: Int,
+    depth: Int = 0,
+    flipped: Boolean = false,
+    modifier: Modifier = Modifier
+) {
+    val clamped = evalWhiteCp.coerceIn(-900, 900)
+    val rawWhiteFraction = 0.5f + (clamped / 1800f)
+    val whiteFraction by animateFloatAsState(
+        targetValue = rawWhiteFraction.coerceIn(0.08f, 0.92f),
+        animationSpec = tween(350),
+        label = "hEvalFraction"
+    )
+    val evalLabel = when {
+        evalWhiteCp >= 90000 -> "+M"
+        evalWhiteCp <= -90000 -> "-M"
+        else -> {
+            val pawns = evalWhiteCp / 100f
+            val sign = if (pawns > 0.05f) "+" else ""
+            String.format(java.util.Locale.US, "%s%.1f", sign, pawns)
+        }
+    }
+    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+        val leftIsWhite = !flipped
+        val leftWeight = if (leftIsWhite) whiteFraction else 1f - whiteFraction
+        val rightWeight = 1f - leftWeight
+        val leftColor = if (leftIsWhite) Color(0xFFF8FAFC) else Color(0xFF1E293B)
+        val rightColor = if (leftIsWhite) Color(0xFF1E293B) else Color(0xFFF8FAFC)
+        val leftTextColor = if (leftIsWhite) Color(0xFF0F172A) else Color(0xFFE2E8F0)
+        val rightTextColor = if (leftIsWhite) Color(0xFFE2E8F0) else Color(0xFF0F172A)
+
+        Row(
+            modifier = modifier
+                .fillMaxWidth()
+                .height(22.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(Color(0xFF1E293B)),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .weight(leftWeight.coerceAtLeast(0.08f))
+                    .fillMaxHeight()
+                    .background(leftColor)
+                    .padding(horizontal = 8.dp),
+                contentAlignment = Alignment.CenterStart
+            ) {
+                val showLeftEval = (leftIsWhite && evalWhiteCp >= 0) || (!leftIsWhite && evalWhiteCp < 0)
+                if (showLeftEval) {
+                    Text(
+                        text = if (depth > 0) "$evalLabel  (العمق: ${formatArabicNumber(depth)})" else evalLabel,
+                        fontFamily = MonoFontFamily,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = leftTextColor,
+                        maxLines = 1
+                    )
+                }
+            }
+            Box(
+                modifier = Modifier
+                    .weight(rightWeight.coerceAtLeast(0.08f))
+                    .fillMaxHeight()
+                    .background(rightColor)
+                    .padding(horizontal = 8.dp),
+                contentAlignment = Alignment.CenterEnd
+            ) {
+                val showRightEval = (leftIsWhite && evalWhiteCp < 0) || (!leftIsWhite && evalWhiteCp >= 0)
+                if (showRightEval) {
+                    Text(
+                        text = if (depth > 0) "(العمق: ${formatArabicNumber(depth)})  $evalLabel" else evalLabel,
+                        fontFamily = MonoFontFamily,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = rightTextColor,
+                        maxLines = 1
+                    )
+                }
             }
         }
     }

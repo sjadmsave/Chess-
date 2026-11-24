@@ -13,9 +13,12 @@ import com.example.chess.BoardMaterial
 import com.example.chess.BoardTheme
 import com.example.chess.EngineBackendPreference
 import com.example.chess.EnginePersonality
+import com.example.chess.EvalBarPosition
 import com.example.chess.FloatingBubbleSize
 import com.example.chess.FloatingFrameShape
+import com.example.chess.LastMoveHighlightStyle
 import com.example.chess.PersonalityRisk
+import com.example.chess.PieceAnimationStyle
 import com.example.chess.PieceStyle
 import com.example.chess.SoundProfile
 import com.example.chess.StrengthTier
@@ -26,15 +29,6 @@ import kotlinx.coroutines.flow.map
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "ruqaa_chess_prefs")
 
-/**
- * Default values match Ruqaa Specification Section 13:
- * - light = false (AppThemeMode.DARK)
- * - sound = false, vibrate = false, sound_profile = soft, sound_volume = 55, vibration_style = 0
- * - auto_review = true, human_style = true, auto_overlay = true
- * - piece_set = CLASSIC, board_texture = FLAT, mark_rings = false, mark_legal_visible = true, mark_last_visible = true
- * - overlay_x = 12, overlay_y = 72, overlay_width = 270, overlay_opacity = 100
- * - engine_elo = -1 (uses EASY preset = 700), personality = CLASSIC, intensity = 50, risk = BALANCED
- */
 data class UserPreferences(
     val themeMode: AppThemeMode = AppThemeMode.DARK,
     val boardTheme: BoardTheme = BoardTheme.TOURNAMENT_EMERALD,
@@ -54,7 +48,7 @@ data class UserPreferences(
     val legalMoveColorHex: Long = 0xCC72D9EFL,
     val adaptiveMode: Boolean = false,
     val strengthPreset: StrengthTier = StrengthTier.EASY,
-    val customEngineElo: Int = -1, // -1 means use strengthPreset
+    val customEngineElo: Int = -1,
     val humanStyleEnabled: Boolean = true,
     val enginePersonality: EnginePersonality = EnginePersonality.CLASSIC,
     val personalityIntensity: Int = 50,
@@ -62,6 +56,8 @@ data class UserPreferences(
     val engineBackendPreference: EngineBackendPreference = EngineBackendPreference.STOCKFISH_AUTO,
     val stockfishMoveTimeMs: Int = 900,
     val stockfishThreads: Int = 2,
+    val stockfishHashMb: Int = 32,
+    val powerSavingMode: Boolean = false,
     val autoReviewAfterGame: Boolean = true,
     val floatingAutoShow: Boolean = true,
     val floatingWidthDp: Int = 270,
@@ -77,7 +73,33 @@ data class UserPreferences(
     val remindersEnabled: Boolean = false,
     val reminderHour: Int = 19,
     val reminderMinute: Int = 0,
-    val selectedBotId: String = "fischer"
+    val selectedBotId: String = "fischer",
+    // Game settings (Chessis Pro parity)
+    val premoveEnabled: Boolean = true,
+    val unassistedMode: Boolean = false,
+    val showThreats: Boolean = false,
+    val botResignEnabled: Boolean = false,
+    val pauseOnBlunder: Boolean = true,
+    val pauseOnMistake: Boolean = false,
+    val showMyMoveStrength: Boolean = true,
+    val showOpponentMoveStrength: Boolean = true,
+    // Analysis & Board customization settings
+    val evalBarPosition: EvalBarPosition = EvalBarPosition.SMART,
+    val showEngineArrowsOnBoard: Boolean = true,
+    val analysisMultiPvCount: Int = 3,
+    val showMultiPvArrowNumbers: Boolean = true,
+    val arrowStrengthColors: Boolean = true,
+    val showPreviousBestGhostArrow: Boolean = false,
+    val colorLastMoveByQuality: Boolean = true,
+    val figurineNotation: Boolean = true,
+    val showCapturedPieces: Boolean = true,
+    val showCoordinates: Boolean = true,
+    val lastMoveHighlightStyle: LastMoveHighlightStyle = LastMoveHighlightStyle.FILL,
+    val pieceAnimationStyle: PieceAnimationStyle = PieceAnimationStyle.DEFAULT,
+    val tapOnlyDisableDrag: Boolean = false,
+    val enlargeOnDrag: Boolean = true,
+    val showAverageCplInReport: Boolean = true,
+    val boardScalePercent: Int = 100
 ) {
     val effectiveEngineElo: Int
         get() = if (customEngineElo == -1) strengthPreset.targetElo else customEngineElo
@@ -115,6 +137,8 @@ class UserPreferencesRepository(private val context: Context) {
         val ENGINE_BACKEND = stringPreferencesKey("engine_backend_preference")
         val STOCKFISH_MOVETIME_MS = intPreferencesKey("stockfish_movetime_ms")
         val STOCKFISH_THREADS = intPreferencesKey("stockfish_threads")
+        val STOCKFISH_HASH_MB = intPreferencesKey("stockfish_hash_mb")
+        val POWER_SAVING_MODE = booleanPreferencesKey("power_saving_mode")
         val AUTO_REVIEW = booleanPreferencesKey("auto_review")
         val FLOATING_AUTO_SHOW = booleanPreferencesKey("auto_overlay")
         val FLOATING_WIDTH_DP = intPreferencesKey("overlay_width")
@@ -131,6 +155,32 @@ class UserPreferencesRepository(private val context: Context) {
         val REMINDER_HOUR = intPreferencesKey("reminder_hour")
         val REMINDER_MINUTE = intPreferencesKey("reminder_minute")
         val SELECTED_BOT_ID = stringPreferencesKey("selected_bot_id")
+        // Game settings
+        val PREMOVE_ENABLED = booleanPreferencesKey("premove_enabled")
+        val UNASSISTED_MODE = booleanPreferencesKey("unassisted_mode")
+        val SHOW_THREATS = booleanPreferencesKey("show_threats")
+        val BOT_RESIGN_ENABLED = booleanPreferencesKey("bot_resign_enabled")
+        val PAUSE_ON_BLUNDER = booleanPreferencesKey("pause_on_blunder")
+        val PAUSE_ON_MISTAKE = booleanPreferencesKey("pause_on_mistake")
+        val SHOW_MY_MOVE_STRENGTH = booleanPreferencesKey("show_my_move_strength")
+        val SHOW_OPP_MOVE_STRENGTH = booleanPreferencesKey("show_opp_move_strength")
+        // Analysis & Board Appearance
+        val EVAL_BAR_POSITION = stringPreferencesKey("eval_bar_position")
+        val SHOW_ENGINE_ARROWS = booleanPreferencesKey("show_engine_arrows")
+        val ANALYSIS_MULTIPV = intPreferencesKey("analysis_multipv")
+        val SHOW_MULTIPV_NUMBERS = booleanPreferencesKey("show_multipv_numbers")
+        val ARROW_STRENGTH_COLORS = booleanPreferencesKey("arrow_strength_colors")
+        val SHOW_PREV_BEST_GHOST = booleanPreferencesKey("show_prev_best_ghost")
+        val COLOR_LAST_MOVE_QUALITY = booleanPreferencesKey("color_last_move_quality")
+        val FIGURINE_NOTATION = booleanPreferencesKey("figurine_notation")
+        val SHOW_CAPTURED_PIECES = booleanPreferencesKey("show_captured_pieces")
+        val SHOW_COORDINATES = booleanPreferencesKey("show_coordinates")
+        val LAST_MOVE_HIGHLIGHT_STYLE = stringPreferencesKey("last_move_highlight_style")
+        val PIECE_ANIMATION_STYLE = stringPreferencesKey("piece_animation_style")
+        val TAP_ONLY_DISABLE_DRAG = booleanPreferencesKey("tap_only_disable_drag")
+        val ENLARGE_ON_DRAG = booleanPreferencesKey("enlarge_on_drag")
+        val SHOW_AVG_CPL_REPORT = booleanPreferencesKey("show_avg_cpl_report")
+        val BOARD_SCALE_PERCENT = intPreferencesKey("board_scale_percent")
     }
 
     val preferencesFlow: Flow<UserPreferences> = context.dataStore.data.map { p ->
@@ -162,7 +212,9 @@ class UserPreferencesRepository(private val context: Context) {
             personalityRisk = PersonalityRisk.byId(p[Keys.PERSONALITY_RISK] ?: PersonalityRisk.BALANCED.id),
             engineBackendPreference = EngineBackendPreference.byId(p[Keys.ENGINE_BACKEND] ?: EngineBackendPreference.STOCKFISH_AUTO.id),
             stockfishMoveTimeMs = p[Keys.STOCKFISH_MOVETIME_MS] ?: 900,
-            stockfishThreads = p[Keys.STOCKFISH_THREADS] ?: 2,
+            stockfishThreads = (p[Keys.STOCKFISH_THREADS] ?: 2).coerceIn(1, 4),
+            stockfishHashMb = (p[Keys.STOCKFISH_HASH_MB] ?: 32).coerceIn(16, 256),
+            powerSavingMode = p[Keys.POWER_SAVING_MODE] ?: false,
             autoReviewAfterGame = p[Keys.AUTO_REVIEW] ?: true,
             floatingAutoShow = p[Keys.FLOATING_AUTO_SHOW] ?: true,
             floatingWidthDp = (p[Keys.FLOATING_WIDTH_DP] ?: 270).coerceIn(180, 560),
@@ -178,7 +230,35 @@ class UserPreferencesRepository(private val context: Context) {
             remindersEnabled = p[Keys.REMINDERS_ENABLED] ?: false,
             reminderHour = p[Keys.REMINDER_HOUR] ?: 19,
             reminderMinute = p[Keys.REMINDER_MINUTE] ?: 0,
-            selectedBotId = p[Keys.SELECTED_BOT_ID] ?: "fischer"
+            selectedBotId = p[Keys.SELECTED_BOT_ID] ?: "fischer",
+            premoveEnabled = p[Keys.PREMOVE_ENABLED] ?: true,
+            unassistedMode = p[Keys.UNASSISTED_MODE] ?: false,
+            showThreats = p[Keys.SHOW_THREATS] ?: false,
+            botResignEnabled = p[Keys.BOT_RESIGN_ENABLED] ?: false,
+            pauseOnBlunder = p[Keys.PAUSE_ON_BLUNDER] ?: true,
+            pauseOnMistake = p[Keys.PAUSE_ON_MISTAKE] ?: false,
+            showMyMoveStrength = p[Keys.SHOW_MY_MOVE_STRENGTH] ?: true,
+            showOpponentMoveStrength = p[Keys.SHOW_OPP_MOVE_STRENGTH] ?: true,
+            evalBarPosition = EvalBarPosition.byId(p[Keys.EVAL_BAR_POSITION] ?: EvalBarPosition.SMART.id),
+            showEngineArrowsOnBoard = p[Keys.SHOW_ENGINE_ARROWS] ?: true,
+            analysisMultiPvCount = (p[Keys.ANALYSIS_MULTIPV] ?: 3).coerceIn(1, 5),
+            showMultiPvArrowNumbers = p[Keys.SHOW_MULTIPV_NUMBERS] ?: true,
+            arrowStrengthColors = p[Keys.ARROW_STRENGTH_COLORS] ?: true,
+            showPreviousBestGhostArrow = p[Keys.SHOW_PREV_BEST_GHOST] ?: false,
+            colorLastMoveByQuality = p[Keys.COLOR_LAST_MOVE_QUALITY] ?: true,
+            figurineNotation = p[Keys.FIGURINE_NOTATION] ?: true,
+            showCapturedPieces = p[Keys.SHOW_CAPTURED_PIECES] ?: true,
+            showCoordinates = p[Keys.SHOW_COORDINATES] ?: true,
+            lastMoveHighlightStyle = LastMoveHighlightStyle.byId(
+                p[Keys.LAST_MOVE_HIGHLIGHT_STYLE] ?: LastMoveHighlightStyle.FILL.id
+            ),
+            pieceAnimationStyle = PieceAnimationStyle.byId(
+                p[Keys.PIECE_ANIMATION_STYLE] ?: PieceAnimationStyle.DEFAULT.id
+            ),
+            tapOnlyDisableDrag = p[Keys.TAP_ONLY_DISABLE_DRAG] ?: false,
+            enlargeOnDrag = p[Keys.ENLARGE_ON_DRAG] ?: true,
+            showAverageCplInReport = p[Keys.SHOW_AVG_CPL_REPORT] ?: true,
+            boardScalePercent = (p[Keys.BOARD_SCALE_PERCENT] ?: 100).coerceIn(85, 100)
         )
     }
 
@@ -202,7 +282,11 @@ class UserPreferencesRepository(private val context: Context) {
         legalMoveColorHex: Long,
         showLastMove: Boolean,
         showLegalMoves: Boolean,
-        useRingsInsteadOfDots: Boolean
+        useRingsInsteadOfDots: Boolean,
+        lastMoveHighlightStyle: LastMoveHighlightStyle = LastMoveHighlightStyle.FILL,
+        pieceAnimationStyle: PieceAnimationStyle = PieceAnimationStyle.DEFAULT,
+        showCoordinates: Boolean = true,
+        boardTheme: BoardTheme? = null
     ) {
         context.dataStore.edit {
             it[Keys.PIECE_STYLE] = pieceStyle.id
@@ -213,6 +297,12 @@ class UserPreferencesRepository(private val context: Context) {
             it[Keys.SHOW_LAST_MOVE] = showLastMove
             it[Keys.SHOW_LEGAL_MOVES] = showLegalMoves
             it[Keys.USE_RINGS] = useRingsInsteadOfDots
+            it[Keys.LAST_MOVE_HIGHLIGHT_STYLE] = lastMoveHighlightStyle.id
+            it[Keys.PIECE_ANIMATION_STYLE] = pieceAnimationStyle.id
+            it[Keys.SHOW_COORDINATES] = showCoordinates
+            if (boardTheme != null) {
+                it[Keys.BOARD_THEME] = boardTheme.id
+            }
         }
     }
 
@@ -284,7 +374,15 @@ class UserPreferencesRepository(private val context: Context) {
     }
 
     suspend fun setStockfishThreads(threads: Int) {
-        context.dataStore.edit { it[Keys.STOCKFISH_THREADS] = threads.coerceIn(1, 2) }
+        context.dataStore.edit { it[Keys.STOCKFISH_THREADS] = threads.coerceIn(1, 4) }
+    }
+
+    suspend fun setStockfishHashMb(hashMb: Int) {
+        context.dataStore.edit { it[Keys.STOCKFISH_HASH_MB] = hashMb.coerceIn(16, 256) }
+    }
+
+    suspend fun setPowerSavingMode(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.POWER_SAVING_MODE] = enabled }
     }
 
     suspend fun setAutoReviewAfterGame(enabled: Boolean) {
@@ -352,5 +450,93 @@ class UserPreferencesRepository(private val context: Context) {
         context.dataStore.edit {
             it[Keys.XP_POINTS] = (it[Keys.XP_POINTS] ?: 0) + xp
         }
+    }
+
+    suspend fun setPremoveEnabled(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.PREMOVE_ENABLED] = enabled }
+    }
+
+    suspend fun setUnassistedMode(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.UNASSISTED_MODE] = enabled }
+    }
+
+    suspend fun setShowThreats(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.SHOW_THREATS] = enabled }
+    }
+
+    suspend fun setBotResignEnabled(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.BOT_RESIGN_ENABLED] = enabled }
+    }
+
+    suspend fun setPauseOnBlunder(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.PAUSE_ON_BLUNDER] = enabled }
+    }
+
+    suspend fun setPauseOnMistake(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.PAUSE_ON_MISTAKE] = enabled }
+    }
+
+    suspend fun setShowMyMoveStrength(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.SHOW_MY_MOVE_STRENGTH] = enabled }
+    }
+
+    suspend fun setShowOpponentMoveStrength(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.SHOW_OPP_MOVE_STRENGTH] = enabled }
+    }
+
+    suspend fun setEvalBarPosition(position: EvalBarPosition) {
+        context.dataStore.edit { it[Keys.EVAL_BAR_POSITION] = position.id }
+    }
+
+    suspend fun setShowEngineArrowsOnBoard(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.SHOW_ENGINE_ARROWS] = enabled }
+    }
+
+    suspend fun setAnalysisMultiPvCount(count: Int) {
+        context.dataStore.edit { it[Keys.ANALYSIS_MULTIPV] = count.coerceIn(1, 5) }
+    }
+
+    suspend fun setShowMultiPvArrowNumbers(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.SHOW_MULTIPV_NUMBERS] = enabled }
+    }
+
+    suspend fun setArrowStrengthColors(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.ARROW_STRENGTH_COLORS] = enabled }
+    }
+
+    suspend fun setShowPreviousBestGhostArrow(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.SHOW_PREV_BEST_GHOST] = enabled }
+    }
+
+    suspend fun setColorLastMoveByQuality(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.COLOR_LAST_MOVE_QUALITY] = enabled }
+    }
+
+    suspend fun setFigurineNotation(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.FIGURINE_NOTATION] = enabled }
+    }
+
+    suspend fun setShowCapturedPieces(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.SHOW_CAPTURED_PIECES] = enabled }
+    }
+
+    suspend fun setShowCoordinates(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.SHOW_COORDINATES] = enabled }
+    }
+
+    suspend fun setTapOnlyDisableDrag(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.TAP_ONLY_DISABLE_DRAG] = enabled }
+    }
+
+    suspend fun setEnlargeOnDrag(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.ENLARGE_ON_DRAG] = enabled }
+    }
+
+    suspend fun setShowAverageCplInReport(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.SHOW_AVG_CPL_REPORT] = enabled }
+    }
+
+    suspend fun setBoardScalePercent(scale: Int) {
+        context.dataStore.edit { it[Keys.BOARD_SCALE_PERCENT] = scale.coerceIn(85, 100) }
     }
 }
